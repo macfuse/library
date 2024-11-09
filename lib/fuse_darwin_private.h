@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2020 Benjamin Fleischer
+ * Copyright (c) 2011-2024 Benjamin Fleischer
  */
 
 #ifdef __APPLE__
@@ -67,10 +67,7 @@ typedef struct fuse_sem {
 
 int fuse_sem_init(fuse_sem_t *sem, int pshared, unsigned int value);
 int fuse_sem_destroy(fuse_sem_t *sem);
-int fuse_sem_getvalue(fuse_sem_t *sem, unsigned int *value);
 int fuse_sem_post(fuse_sem_t *sem);
-int fuse_sem_timedwait(fuse_sem_t *sem, const struct timespec *abs_timeout);
-int fuse_sem_trywait(fuse_sem_t *sem);
 int fuse_sem_wait(fuse_sem_t *sem);
 
 #ifdef DARWIN_SEMAPHORE_COMPAT
@@ -79,15 +76,12 @@ int fuse_sem_wait(fuse_sem_t *sem);
 
 typedef fuse_sem_t sem_t;
 
-#define sem_init(s, p, v)   fuse_sem_init(s, p, v)
-#define sem_destroy(s)      fuse_sem_destroy(s)
-#define sem_getvalue(s, v)  fuse_sem_getvalue(s, v)
-#define sem_post(s)         fuse_sem_post(s)
-#define sem_timedwait(s, t) fuse_sem_timedwait(s, t)
-#define sem_trywait(s)      fuse_sem_trywait(s)
-#define sem_wait(s)         fuse_sem_wait(s)
+#define sem_init(s, p, v) fuse_sem_init(s, p, v)
+#define sem_destroy(s)    fuse_sem_destroy(s)
+#define sem_post(s)       fuse_sem_post(s)
+#define sem_wait(s)       fuse_sem_wait(s)
 
-#define SEM_VALUE_MAX       FUSE_SEM_VALUE_MAX
+#define SEM_VALUE_MAX     FUSE_SEM_VALUE_MAX
 
 #endif /* DARWIN_SEMAPHORE_COMPAT */
 

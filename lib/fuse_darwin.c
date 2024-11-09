@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
  * Copyright (c) 2012 Anatol Pomozov
- * Copyright (c) 2011-2017 Benjamin Fleischer
+ * Copyright (c) 2011-2024 Benjamin Fleischer
  */
 
 #include "fuse_i.h"
@@ -109,25 +109,6 @@ fuse_sem_destroy(fuse_sem_t *sem)
 	return res;
 }
 
-int
-fuse_sem_getvalue(fuse_sem_t *sem, unsigned int *sval)
-{
-	int res = 0;
-
-	pthread_mutex_lock(&sem->__data.local.count_lock);
-
-	if (sem->id != __SEM_ID_LOCAL) {
-		res = -1;
-		errno = EINVAL;
-	} else {
-		*sval = sem->__data.local.count;
-	}
-
-	pthread_mutex_unlock(&sem->__data.local.count_lock);
-
-	return res;
-}
-
 /* http://www.opengroup.org/onlinepubs/007908799/xsh/sem_post.html */
 int
 fuse_sem_post(fuse_sem_t *sem)
@@ -150,72 +131,6 @@ fuse_sem_post(fuse_sem_t *sem)
 	}
 
 	pthread_mutex_unlock(&sem->__data.local.count_lock);
-
-	return res;
-}
-
-/* http://www.opengroup.org/onlinepubs/009695399/functions/sem_timedwait.html */
-int
-fuse_sem_timedwait(fuse_sem_t *sem, const struct timespec *abs_timeout)
-{
-	int res = 0;
-
-	if (abs_timeout &&
-	    (abs_timeout->tv_nsec < 0 || abs_timeout->tv_nsec >= 1000000000)) {
-		errno = EINVAL;
-		return -1;
-	}
-
-	pthread_cleanup_push((void(*)(void*))&pthread_mutex_unlock,
-			     &sem->__data.local.count_lock);
-
-	pthread_mutex_lock(&sem->__data.local.count_lock);
-
-	if (sem->id != __SEM_ID_LOCAL) {
-		errno = EINVAL;
-		res = -1;
-	} else {
-		if (!sem->__data.local.count) {
-			res = pthread_cond_timedwait(&sem->__data.local.count_cond,
-						     &sem->__data.local.count_lock,
-						     abs_timeout);
-		}
-		if (res) {
-			assert(res == ETIMEDOUT);
-			res = -1;
-			errno = ETIMEDOUT;
-		} else if (sem->id != __SEM_ID_LOCAL) {
-			res = -1;
-			errno = EINVAL;
-		} else {
-			sem->__data.local.count--;
-		}
-	}
-
-	pthread_cleanup_pop(1);
-
-	return res;
-}
-
-/* http://www.opengroup.org/onlinepubs/007908799/xsh/sem_trywait.html */
-int
-fuse_sem_trywait(fuse_sem_t *sem)
-{
-	int res = 0;
-
-	pthread_mutex_lock(&sem->__data.local.count_lock);
-
-	if (sem->id != __SEM_ID_LOCAL) {
-		res = -1;
-		errno = EINVAL;
-	} else if (sem->__data.local.count) {
-		sem->__data.local.count--;
-	} else {
-		res = -1;
-		errno = EAGAIN;
-	}
-
-	pthread_mutex_unlock (&sem->__data.local.count_lock);
 
 	return res;
 }
