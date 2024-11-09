@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2012 Benjamin Fleischer
+ * Copyright (c) 2011-2024 Benjamin Fleischer
  */
 
 #include "fuse_lowlevel.h"
@@ -21,14 +21,35 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
-#ifdef __APPLE__
-#  define DARWIN_SEMAPHORE_COMPAT 1
-#  include "fuse_darwin_private.h"
-#else
+#ifndef __APPLE__
 #  include <semaphore.h>
 #endif
 #include <errno.h>
 #include <sys/time.h>
+
+#ifdef __APPLE__
+
+/*
+ * Unnamed semaphores are not available on macOS. We use dispatch semaphores as
+ * fallback.
+ *
+ * Unlike unnamed semaphores, dispatch semaphores are not async-signal safe.
+ * This means using dispatch semaphores in signal handlers is not safe. This
+ * is not an issue here since we do not use semaphores in signal handlers.
+ *
+ * Unlike sem_wait(), dispatch_semmaphore_wait() is not interruptible. This is
+ * not an issue here since we do not rely on sem_wait() being interruptible.
+ */
+
+#  include <dispatch/dispatch.h>
+
+#  define sem_t dispatch_semaphore_t
+#  define sem_init(s, p, v) *(s) = dispatch_semaphore_create((v))
+#  define sem_post(s) dispatch_semaphore_signal(*(s))
+#  define sem_wait(s) dispatch_semaphore_wait(*(s), DISPATCH_TIME_FOREVER)
+#  define sem_destroy(s) dispatch_release(*(s))
+
+#endif /* __APPLE__ */
 
 /* Environment var controlling the thread stack size */
 #define ENVNAME_THREAD_STACK "FUSE_THREAD_STACK"
