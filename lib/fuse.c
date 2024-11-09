@@ -1809,7 +1809,7 @@ static inline int fuse_compat_statfs(struct fuse_fs *fs, const char *path,
 #ifdef __APPLE__
 
 int fuse_fs_setattr_x(struct fuse_fs *fs, const char *path,
-      		      struct setattr_x *attr)
+		      struct setattr_x *attr)
 {
 	fuse_get_context()->private_data = fs->user_data;
 	if (fs->op.setattr_x) {
@@ -1823,7 +1823,7 @@ int fuse_fs_setattr_x(struct fuse_fs *fs, const char *path,
 }
 
 int fuse_fs_fsetattr_x(struct fuse_fs *fs, const char *path,
-      		       struct setattr_x *attr, struct fuse_file_info *fi)
+		       struct setattr_x *attr, struct fuse_file_info *fi)
 {
 	fuse_get_context()->private_data = fs->user_data;
 	if (fs->op.fsetattr_x) {
@@ -4318,9 +4318,9 @@ static void fuse_lib_statfs(fuse_req_t req, fuse_ino_t ino)
 
 	if (!err)
 #ifdef __APPLE__
-                if (f->statfs_x_ok)
+		if (f->statfs_x_ok)
 			fuse_reply_statfs_x(req, &buf.statfs);
-                else
+		else
 #endif
 			fuse_reply_statfs(req, &buf.statvfs);
 	else

@@ -170,7 +170,7 @@ static int volicon_setvolname(const char *volname)
 }
 
 static int volicon_exchange(const char *path1, const char *path2,
-                            unsigned long options)
+			    unsigned long options)
 {
 	ERROR_IF_MAGIC_FILE(path1, EACCES);
 	ERROR_IF_MAGIC_FILE(path2, EACCES);
@@ -230,7 +230,7 @@ volicon_chflags(const char *path, uint32_t flags)
 
 static int
 volicon_getxtimes(const char *path, struct timespec *bkuptime,
-                  struct timespec *crtime)
+		  struct timespec *crtime)
 {
 	if (volicon_is_a_magic_file(path)) {
 		bkuptime->tv_sec = 0;
@@ -405,7 +405,7 @@ volicon_fsync(const char *path, int isdatasync,
 
 static int
 volicon_setxattr(const char *path, const char *name, const char *value,
-                 size_t size, int flags, uint32_t position)
+		 size_t size, int flags, uint32_t position)
 {
 	ERROR_IF_MAGIC_FILE(path, EPERM);
 
@@ -427,7 +427,7 @@ volicon_setxattr(const char *path, const char *name, const char *value,
 
 static int
 volicon_getxattr(const char *path, const char *name, char *value, size_t size,
-                 uint32_t position)
+		 uint32_t position)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOATTR);
 
@@ -559,7 +559,7 @@ volicon_opendir(const char *path, struct fuse_file_info *fi)
 
 static int
 volicon_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                off_t offset, struct fuse_file_info *fi)
+		off_t offset, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTDIR);
 
@@ -661,7 +661,7 @@ volicon_fgetattr(const char *path, struct stat *buf, struct fuse_file_info *fi)
 
 static int
 volicon_lock(const char *path, struct fuse_file_info *fi, int cmd,
-             struct flock *lock)
+	     struct flock *lock)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTSUP);
 
@@ -766,11 +766,11 @@ volicon_help(void)
 
 static int
 volicon_opt_proc(void *data, const char *arg, int key,
-                 struct fuse_args *outargs)
+		 struct fuse_args *outargs)
 {
-	(void)data;
-	(void)arg;
-	(void)outargs;
+	(void) data;
+	(void) arg;
+	(void) outargs;
 
 	if (!key) {
 		volicon_help();

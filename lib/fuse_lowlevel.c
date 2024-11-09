@@ -2232,7 +2232,7 @@ int fuse_lowlevel_notify_poll(struct fuse_pollhandle *ph)
 }
 
 int fuse_lowlevel_notify_inval_inode(struct fuse_chan *ch, fuse_ino_t ino,
-                                     off_t off, off_t len)
+				     off_t off, off_t len)
 {
 	struct fuse_notify_inval_inode_out outarg;
 	struct fuse_ll *f;
@@ -2256,7 +2256,7 @@ int fuse_lowlevel_notify_inval_inode(struct fuse_chan *ch, fuse_ino_t ino,
 }
 
 int fuse_lowlevel_notify_inval_entry(struct fuse_chan *ch, fuse_ino_t parent,
-                                     const char *name, size_t namelen)
+				     const char *name, size_t namelen)
 {
 	struct fuse_notify_inval_entry_out outarg;
 	struct fuse_ll *f;

@@ -94,7 +94,7 @@ static void fuse_kern_chan_destroy(struct fuse_chan *ch)
 		(void)ioctl(fd, FUSEDEVIOCSETDAEMONDEAD, &fd);
 #endif
 		close(fd);
-    }
+	}
 }
 
 #ifdef __APPLE__

@@ -275,9 +275,7 @@ struct fuse_conn_info {
 };
 
 #ifdef __APPLE__
-   /*
-    * Deprecated, use capability flags directly
-    */
+/* Deprecated, use capability flags directly */
 #  define FUSE_ENABLE_SETVOLNAME(i)	  (i)->want |= FUSE_CAP_VOL_RENAME
 #  define FUSE_ENABLE_XTIMES(i)		  (i)->want |= FUSE_CAP_XTIMES
 #  define FUSE_ENABLE_CASE_INSENSITIVE(i) (i)->want |= FUSE_CAP_CASE_INSENSITIVE

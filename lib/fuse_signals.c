@@ -32,7 +32,7 @@ static void exit_handler(int sig)
 #else
 		fuse_session_exit(fuse_instance);
 #endif
-    }
+	}
 }
 
 static int set_one_signal_handler(int sig, void (*handler)(int), int remove)

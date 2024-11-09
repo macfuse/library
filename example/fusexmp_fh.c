@@ -265,8 +265,8 @@ static int xmp_rename(const char *from, const char *to)
 
 static int xmp_setvolname(const char *volname)
 {
-    (void)volname;
-    return 0;
+	(void) volname;
+	return 0;
 }
 
 static int xmp_exchange(const char *path1, const char *path2,

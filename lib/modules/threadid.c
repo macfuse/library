@@ -131,7 +131,7 @@ static int threadid_setvolname(const char *volname)
 }
 
 static int threadid_exchange(const char *path1, const char *path2,
-                             unsigned long options)
+			     unsigned long options)
 {
 	THREADID_PRE()
 	int res = fuse_fs_exchange(threadid_get()->next, path1, path2, options);
@@ -202,7 +202,7 @@ threadid_chflags(const char *path, uint32_t flags)
 
 static int
 threadid_getxtimes(const char *path, struct timespec *bkuptime,
-                   struct timespec *crtime)
+		   struct timespec *crtime)
 {
 	THREADID_PRE()
 	int res = fuse_fs_getxtimes(threadid_get()->next, path, bkuptime, crtime);
@@ -370,7 +370,7 @@ threadid_setxattr(const char *path, const char *name, const char *value,
 
 static int
 threadid_getxattr(const char *path, const char *name, char *value, size_t size,
-                  uint32_t position)
+		  uint32_t position)
 {
 	THREADID_PRE()
 	int res = fuse_fs_getxattr(threadid_get()->next, path, name, value, size,
@@ -616,11 +616,11 @@ threadid_help(void)
 
 static int
 threadid_opt_proc(void *data, const char *arg, int key,
-                  struct fuse_args *outargs)
+		  struct fuse_args *outargs)
 {
-	(void)data;
-	(void)arg;
-	(void)outargs;
+	(void) data;
+	(void) arg;
+	(void) outargs;
 
 	if (!key) {
 		threadid_help();

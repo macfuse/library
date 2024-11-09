@@ -15,8 +15,8 @@
 int
 main(void)
 {
-    fprintf(stderr, "This example is not supported on this platform.\n");
-    return 1;
+	fprintf(stderr, "This example is not supported on this platform.\n");
+	return 1;
 }
 
 #else /* !__APPLE__ */
