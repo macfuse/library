@@ -276,7 +276,7 @@ static int receive_fd(int fd)
 		perror("recvmsg");
 		return -1;
 	}
-	if(!rv) {
+	if (!rv) {
 		/* EOF */
 		return -1;
 	}

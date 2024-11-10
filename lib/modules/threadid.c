@@ -7,7 +7,7 @@
 */
 
 /*
- * Copyright (c) 2024 Benjamin Fleischer
+ * Copyright (c) 2012-2024 Benjamin Fleischer
  */
 
 #define FUSE_USE_VERSION 26
@@ -20,8 +20,7 @@
 #include <unistd.h>
 #include <fuse.h>
 
-static __inline__ int
-threadid_pthread_setugid_np(uid_t uid, gid_t gid)
+static __inline__ int threadid_pthread_setugid_np(uid_t uid, gid_t gid)
 {
 	_Pragma("clang diagnostic push")
 	_Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
@@ -51,19 +50,17 @@ struct threadid {
 	struct fuse_fs *next;
 };
 
-static struct threadid *
-threadid_get(void)
+static struct threadid *threadid_get(void)
 {
 	return fuse_get_context()->private_data;
 }
 
 /*
  * FUSE API Operations
- * Listed in the same order as in struct fuse_operations in <fuse.h>
+ * Listed in the same order as in struct fuse_operations in fuse.h
  */
 
-static int
-threadid_getattr(const char *path, struct stat *buf)
+static int threadid_getattr(const char *path, struct stat *buf)
 {
 	THREADID_PRE
 	int res = fuse_fs_getattr(threadid_get()->next, path, buf);
@@ -72,8 +69,7 @@ threadid_getattr(const char *path, struct stat *buf)
 	return res;
 }
 
-static int
-threadid_readlink(const char *path, char *buf, size_t size)
+static int threadid_readlink(const char *path, char *buf, size_t size)
 {
 	THREADID_PRE
 	int res = fuse_fs_readlink(threadid_get()->next, path, buf, size);
@@ -82,8 +78,7 @@ threadid_readlink(const char *path, char *buf, size_t size)
 	return res;
 }
 
-static int
-threadid_mknod(const char *path, mode_t mode, dev_t rdev)
+static int threadid_mknod(const char *path, mode_t mode, dev_t rdev)
 {
 	THREADID_PRE
 	int res = fuse_fs_mknod(threadid_get()->next, path, mode, rdev);
@@ -92,8 +87,7 @@ threadid_mknod(const char *path, mode_t mode, dev_t rdev)
 	return res;
 }
 
-static int
-threadid_mkdir(const char *path, mode_t mode)
+static int threadid_mkdir(const char *path, mode_t mode)
 {
 	THREADID_PRE
 	int res = fuse_fs_mkdir(threadid_get()->next, path, mode);
@@ -102,8 +96,7 @@ threadid_mkdir(const char *path, mode_t mode)
 	return res;
 }
 
-static int
-threadid_unlink(const char *path)
+static int threadid_unlink(const char *path)
 {
 	THREADID_PRE
 	int res = fuse_fs_unlink(threadid_get()->next, path);
@@ -112,8 +105,7 @@ threadid_unlink(const char *path)
 	return res;
 }
 
-static int
-threadid_rmdir(const char *path)
+static int threadid_rmdir(const char *path)
 {
 	THREADID_PRE
 	int res = fuse_fs_rmdir(threadid_get()->next, path);
@@ -122,8 +114,7 @@ threadid_rmdir(const char *path)
 	return res;
 }
 
-static int
-threadid_symlink(const char *from, const char *path)
+static int threadid_symlink(const char *from, const char *path)
 {
 	THREADID_PRE
 	int res = fuse_fs_symlink(threadid_get()->next, from, path);
@@ -170,8 +161,7 @@ static int threadid_renamex(const char *from, const char *to,
 	return res;
 }
 
-static int
-threadid_link(const char *from, const char *to)
+static int threadid_link(const char *from, const char *to)
 {
 	THREADID_PRE
 	int res = fuse_fs_link(threadid_get()->next, from, to);
@@ -180,8 +170,7 @@ threadid_link(const char *from, const char *to)
 	return res;
 }
 
-static int
-threadid_setattr_x(const char *path, struct setattr_x *attr)
+static int threadid_setattr_x(const char *path, struct setattr_x *attr)
 {
 	THREADID_PRE
 	int res = fuse_fs_setattr_x(threadid_get()->next, path, attr);
@@ -190,9 +179,8 @@ threadid_setattr_x(const char *path, struct setattr_x *attr)
 	return res;
 }
 
-static int
-threadid_fsetattr_x(const char *path, struct setattr_x *attr,
-		    struct fuse_file_info *fi)
+static int threadid_fsetattr_x(const char *path, struct setattr_x *attr,
+			       struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_fsetattr_x(threadid_get()->next, path, attr, fi);
@@ -201,8 +189,7 @@ threadid_fsetattr_x(const char *path, struct setattr_x *attr,
 	return res;
 }
 
-static int
-threadid_chflags(const char *path, uint32_t flags)
+static int threadid_chflags(const char *path, uint32_t flags)
 {
 	THREADID_PRE
 	int res = fuse_fs_chflags(threadid_get()->next, path, flags);
@@ -211,19 +198,19 @@ threadid_chflags(const char *path, uint32_t flags)
 	return res;
 }
 
-static int
-threadid_getxtimes(const char *path, struct timespec *bkuptime,
-		   struct timespec *crtime)
+static int threadid_getxtimes(const char *path, struct timespec *bkuptime,
+			      struct timespec *crtime)
 {
 	THREADID_PRE
-	int res = fuse_fs_getxtimes(threadid_get()->next, path, bkuptime, crtime);
+	int res = fuse_fs_getxtimes(threadid_get()->next, path, bkuptime,
+				    crtime);
 	THREADID_POST
 
 	return res;
 }
 
-static int
-threadid_setbkuptime(const char *path, const struct timespec *bkuptime)
+static int threadid_setbkuptime(const char *path,
+				const struct timespec *bkuptime)
 {
 	THREADID_PRE
 	int res = fuse_fs_setbkuptime(threadid_get()->next, path, bkuptime);
@@ -232,8 +219,7 @@ threadid_setbkuptime(const char *path, const struct timespec *bkuptime)
 	return res;
 }
 
-static int
-threadid_setchgtime(const char *path, const struct timespec *chgtime)
+static int threadid_setchgtime(const char *path, const struct timespec *chgtime)
 {
 	THREADID_PRE
 	int res = fuse_fs_setchgtime(threadid_get()->next, path, chgtime);
@@ -242,8 +228,7 @@ threadid_setchgtime(const char *path, const struct timespec *chgtime)
 	return res;
 }
 
-static int
-threadid_setcrtime(const char *path, const struct timespec *crtime)
+static int threadid_setcrtime(const char *path, const struct timespec *crtime)
 {
 	THREADID_PRE
 	int res = fuse_fs_setcrtime(threadid_get()->next, path, crtime);
@@ -252,8 +237,7 @@ threadid_setcrtime(const char *path, const struct timespec *crtime)
 	return res;
 }
 
-static int
-threadid_chmod(const char *path, mode_t mode)
+static int threadid_chmod(const char *path, mode_t mode)
 {
 	THREADID_PRE
 	int res = fuse_fs_chmod(threadid_get()->next, path, mode);
@@ -262,8 +246,7 @@ threadid_chmod(const char *path, mode_t mode)
 	return res;
 }
 
-static int
-threadid_chown(const char *path, uid_t uid, gid_t gid)
+static int threadid_chown(const char *path, uid_t uid, gid_t gid)
 {
 	THREADID_PRE
 	int res = fuse_fs_chown(threadid_get()->next, path, uid, gid);
@@ -272,8 +255,7 @@ threadid_chown(const char *path, uid_t uid, gid_t gid)
 	return res;
 }
 
-static int
-threadid_truncate(const char *path, off_t size)
+static int threadid_truncate(const char *path, off_t size)
 {
 	THREADID_PRE
 	int res = fuse_fs_truncate(threadid_get()->next, path, size);
@@ -282,8 +264,7 @@ threadid_truncate(const char *path, off_t size)
 	return res;
 }
 
-static int
-threadid_open(const char *path, struct fuse_file_info *fi)
+static int threadid_open(const char *path, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_open(threadid_get()->next, path, fi);
@@ -292,9 +273,9 @@ threadid_open(const char *path, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_read_buf(const char *path, struct fuse_bufvec **bufp, size_t size,
-		  off_t offset, struct fuse_file_info *fi)
+static int threadid_read_buf(const char *path, struct fuse_bufvec **bufp,
+			     size_t size, off_t offset,
+			     struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_read_buf(threadid_get()->next, path, bufp, size,
@@ -304,9 +285,8 @@ threadid_read_buf(const char *path, struct fuse_bufvec **bufp, size_t size,
 	return res;
 }
 
-static int
-threadid_write_buf(const char *path, struct fuse_bufvec *buf, off_t offset,
-		   struct fuse_file_info *fi)
+static int threadid_write_buf(const char *path, struct fuse_bufvec *buf,
+			      off_t offset, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_write_buf(threadid_get()->next, path, buf, offset,
@@ -316,8 +296,7 @@ threadid_write_buf(const char *path, struct fuse_bufvec *buf, off_t offset,
 	return res;
 }
 
-static int
-threadid_statfs(const char *path, struct statvfs *stbuf)
+static int threadid_statfs(const char *path, struct statvfs *stbuf)
 {
 	THREADID_PRE
 	int res = fuse_fs_statfs(threadid_get()->next, path, stbuf);
@@ -326,8 +305,7 @@ threadid_statfs(const char *path, struct statvfs *stbuf)
 	return res;
 }
 
-static int
-threadid_statfs_x(const char *path, struct statfs *stbuf)
+static int threadid_statfs_x(const char *path, struct statfs *stbuf)
 {
 	THREADID_PRE
 	int res = fuse_fs_statfs_x(threadid_get()->next, path, stbuf);
@@ -336,8 +314,7 @@ threadid_statfs_x(const char *path, struct statfs *stbuf)
 	return res;
 }
 
-static int
-threadid_flush(const char *path, struct fuse_file_info *fi)
+static int threadid_flush(const char *path, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_flush(threadid_get()->next, path, fi);
@@ -346,8 +323,7 @@ threadid_flush(const char *path, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_release(const char *path, struct fuse_file_info *fi)
+static int threadid_release(const char *path, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_release(threadid_get()->next, path, fi);
@@ -356,8 +332,7 @@ threadid_release(const char *path, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_fsync(const char *path, int isdatasync,
+static int threadid_fsync(const char *path, int isdatasync,
 	       struct fuse_file_info *fi)
 {
 	THREADID_PRE
@@ -367,32 +342,30 @@ threadid_fsync(const char *path, int isdatasync,
 	return res;
 }
 
-static int
-threadid_setxattr(const char *path, const char *name, const char *value,
-		  size_t size, int flags, uint32_t position)
+static int threadid_setxattr(const char *path, const char *name,
+			     const char *value, size_t size, int flags,
+			     uint32_t position)
 {
 	THREADID_PRE
-	int res = fuse_fs_setxattr(threadid_get()->next, path, name, value, size,
-				   flags, position);
+	int res = fuse_fs_setxattr(threadid_get()->next, path, name, value,
+				   size, flags, position);
 	THREADID_POST
 
 	return res;
 }
 
-static int
-threadid_getxattr(const char *path, const char *name, char *value, size_t size,
-		  uint32_t position)
+static int threadid_getxattr(const char *path, const char *name, char *value,
+			     size_t size, uint32_t position)
 {
 	THREADID_PRE
-	int res = fuse_fs_getxattr(threadid_get()->next, path, name, value, size,
-				   position);
+	int res = fuse_fs_getxattr(threadid_get()->next, path, name, value,
+				   size, position);
 	THREADID_POST
 
 	return res;
 }
 
-static int
-threadid_listxattr(const char *path, char *list, size_t size)
+static int threadid_listxattr(const char *path, char *list, size_t size)
 {
 	THREADID_PRE
 	int res = fuse_fs_listxattr(threadid_get()->next, path, list, size);
@@ -401,8 +374,7 @@ threadid_listxattr(const char *path, char *list, size_t size)
 	return res;
 }
 
-static int
-threadid_removexattr(const char *path, const char *name)
+static int threadid_removexattr(const char *path, const char *name)
 {
 	THREADID_PRE
 	int res = fuse_fs_removexattr(threadid_get()->next, path, name);
@@ -411,8 +383,7 @@ threadid_removexattr(const char *path, const char *name)
 	return res;
 }
 
-static int
-threadid_opendir(const char *path, struct fuse_file_info *fi)
+static int threadid_opendir(const char *path, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_opendir(threadid_get()->next, path, fi);
@@ -421,9 +392,8 @@ threadid_opendir(const char *path, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-		 off_t offset, struct fuse_file_info *fi)
+static int threadid_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+			    off_t offset, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_readdir(threadid_get()->next, path, buf, filler,
@@ -433,8 +403,7 @@ threadid_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	return res;
 }
 
-static int
-threadid_releasedir(const char *path, struct fuse_file_info *fi)
+static int threadid_releasedir(const char *path, struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_releasedir(threadid_get()->next, path, fi);
@@ -443,8 +412,8 @@ threadid_releasedir(const char *path, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi)
+static int threadid_fsyncdir(const char *path, int isdatasync,
+			     struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_fsyncdir(threadid_get()->next, path, isdatasync, fi);
@@ -453,8 +422,7 @@ threadid_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi)
 	return res;
 }
 
-static void *
-threadid_init(struct fuse_conn_info *conn)
+static void *threadid_init(struct fuse_conn_info *conn)
 {
 	struct threadid *d = threadid_get();
 
@@ -463,8 +431,7 @@ threadid_init(struct fuse_conn_info *conn)
 	return d;
 }
 
-static void
-threadid_destroy(void *data)
+static void threadid_destroy(void *data)
 {
 	struct threadid *d = data;
 
@@ -475,8 +442,7 @@ threadid_destroy(void *data)
 	return;
 }
 
-static int
-threadid_access(const char *path, int mask)
+static int threadid_access(const char *path, int mask)
 {
 	THREADID_PRE
 	int res = fuse_fs_access(threadid_get()->next, path, mask);
@@ -485,8 +451,8 @@ threadid_access(const char *path, int mask)
 	return res;
 }
 
-static int
-threadid_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+static int threadid_create(const char *path, mode_t mode,
+			   struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_create(threadid_get()->next, path, mode, fi);
@@ -495,8 +461,8 @@ threadid_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_ftruncate(const char *path, off_t size, struct fuse_file_info *fi)
+static int threadid_ftruncate(const char *path, off_t size,
+			      struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_ftruncate(threadid_get()->next, path, size, fi);
@@ -505,8 +471,8 @@ threadid_ftruncate(const char *path, off_t size, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_fgetattr(const char *path, struct stat *buf, struct fuse_file_info *fi)
+static int threadid_fgetattr(const char *path, struct stat *buf,
+			     struct fuse_file_info *fi)
 {
 	THREADID_PRE
 	int res = fuse_fs_fgetattr(threadid_get()->next, path, buf, fi);
@@ -515,9 +481,8 @@ threadid_fgetattr(const char *path, struct stat *buf, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-threadid_lock(const char *path, struct fuse_file_info *fi, int cmd,
-	      struct flock *lock)
+static int threadid_lock(const char *path, struct fuse_file_info *fi, int cmd,
+			 struct flock *lock)
 {
 	THREADID_PRE
 	int res = fuse_fs_lock(threadid_get()->next, path, fi, cmd, lock);
@@ -526,8 +491,7 @@ threadid_lock(const char *path, struct fuse_file_info *fi, int cmd,
 	return res;
 }
 
-static int
-threadid_utimens(const char *path, const struct timespec ts[2])
+static int threadid_utimens(const char *path, const struct timespec ts[2])
 {
 	THREADID_PRE
 	int res = fuse_fs_utimens(threadid_get()->next, path, ts);
@@ -536,8 +500,7 @@ threadid_utimens(const char *path, const struct timespec ts[2])
 	return res;
 }
 
-static int
-threadid_bmap(const char *path, size_t blocksize, uint64_t *idx)
+static int threadid_bmap(const char *path, size_t blocksize, uint64_t *idx)
 {
 	THREADID_PRE
 	int res = fuse_fs_bmap(threadid_get()->next, path, blocksize, idx);
@@ -546,12 +509,12 @@ threadid_bmap(const char *path, size_t blocksize, uint64_t *idx)
 	return res;
 }
 
-static int
-threadid_fallocate(const char *path, int mode, off_t offset, off_t length,
-		    struct fuse_file_info *fi)
+static int threadid_fallocate(const char *path, int mode, off_t offset,
+			      off_t length, struct fuse_file_info *fi)
 {
 	THREADID_PRE
-	int res = fuse_fs_fallocate(threadid_get()->next, path, mode, offset, length, fi);
+	int res = fuse_fs_fallocate(threadid_get()->next, path, mode, offset,
+				    length, fi);
 	THREADID_POST
 
 	return res;
@@ -620,14 +583,12 @@ static struct fuse_opt threadid_opts[] = {
 	FUSE_OPT_END
 };
 
-static void
-threadid_help(void)
+static void threadid_help(void)
 {
 }
 
-static int
-threadid_opt_proc(void *data, const char *arg, int key,
-		  struct fuse_args *outargs)
+static int threadid_opt_proc(void *data, const char *arg, int key,
+			     struct fuse_args *outargs)
 {
 	(void) data;
 	(void) arg;
@@ -641,8 +602,8 @@ threadid_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-static struct fuse_fs *
-threadid_new(struct fuse_args *args, struct fuse_fs *next[])
+static struct fuse_fs *threadid_new(struct fuse_args *args,
+				    struct fuse_fs *next[])
 {
 	int ret;
 	struct fuse_fs *fs;
@@ -659,7 +620,8 @@ threadid_new(struct fuse_args *args, struct fuse_fs *next[])
 	}
 
 	if (!next[0] || next[1]) {
-		fprintf(stderr, "threadid: exactly one next filesystem required\n");
+		fprintf(stderr,
+			"threadid: exactly one next filesystem required\n");
 		goto out_free;
 	}
 

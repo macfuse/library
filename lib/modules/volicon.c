@@ -1,12 +1,19 @@
 /*
- *  Custom volume icon support for macOS
- *
- *  - xattr'ification and overhaul by Amit Singh
- *  - Made into a libfuse stack module by Andrew de los Reyes
+  Custom volume icon support for macOS
+  Copyright (c) 2006-2008 Amit Singh/Google Inc.
+
+  This program can be distributed under the terms of the GNU LGPL.
+  See the file COPYING.LIB
+*/
+
+/*
  *  - Original "volicon" code by Amit Singh
- *
- *  This program can be distributed under the terms of the GNU LGPL.
- *  See the file COPYING.LIB for details.
+ *  - Made into a libfuse stack module by Andrew de los Reyes
+ *  - xattr'ification and overhaul by Amit Singh
+ */
+
+/*
+ * Copyright (c) 2012-2024 Benjamin Fleischer
  */
 
 #define FUSE_USE_VERSION 26
@@ -66,14 +73,12 @@ struct volicon {
 	struct fuse_fs *next;
 };
 
-static struct volicon *
-volicon_get(void)
+static struct volicon *volicon_get(void)
 {
 	return fuse_get_context()->private_data;
 }
 
-static __inline__ int
-volicon_is_icon_magic_file(const char *path)
+static __inline__ int volicon_is_icon_magic_file(const char *path)
 {
 	if (!path) {
 		return 0;
@@ -82,19 +87,17 @@ volicon_is_icon_magic_file(const char *path)
 	return (!strcmp(path, VOLICON_ICON_MAGIC_PATH));
 }
 
-static __inline__ int
-volicon_is_a_magic_file(const char *path)
+static __inline__ int volicon_is_a_magic_file(const char *path)
 {
 	return (volicon_is_icon_magic_file(path));
 }
 
 /*
  * FUSE API Operations
- * Listed in the same order as in struct fuse_operations in <fuse.h>
+ * Listed in the same order as in struct fuse_operations in fuse.h
  */
 
-static int
-volicon_getattr(const char *path, struct stat *buf)
+static int volicon_getattr(const char *path, struct stat *buf)
 {
 	int res = 0;
 
@@ -116,48 +119,42 @@ volicon_getattr(const char *path, struct stat *buf)
 	return res;
 }
 
-static int
-volicon_readlink(const char *path, char *buf, size_t size)
+static int volicon_readlink(const char *path, char *buf, size_t size)
 {
 	ERROR_IF_MAGIC_FILE(path, EINVAL);
 
 	return fuse_fs_readlink(volicon_get()->next, path, buf, size);
 }
 
-static int
-volicon_mknod(const char *path, mode_t mode, dev_t rdev)
+static int volicon_mknod(const char *path, mode_t mode, dev_t rdev)
 {
 	ERROR_IF_MAGIC_FILE(path, EEXIST);
 
 	return fuse_fs_mknod(volicon_get()->next, path, mode, rdev);
 }
 
-static int
-volicon_mkdir(const char *path, mode_t mode)
+static int volicon_mkdir(const char *path, mode_t mode)
 {
 	ERROR_IF_MAGIC_FILE(path, EEXIST);
 
 	return fuse_fs_mkdir(volicon_get()->next, path, mode);
 }
 
-static int
-volicon_unlink(const char *path)
+static int volicon_unlink(const char *path)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_unlink(volicon_get()->next, path);
 }
 
-static int
-volicon_rmdir(const char *path)
+static int volicon_rmdir(const char *path)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTDIR);
 
 	return fuse_fs_rmdir(volicon_get()->next, path);
 }
 
-static int
-volicon_symlink(const char *from, const char *path)
+static int volicon_symlink(const char *from, const char *path)
 {
 	ERROR_IF_MAGIC_FILE(path, EEXIST);
 
@@ -194,8 +191,7 @@ static int volicon_renamex(const char *from, const char *to, unsigned int flags)
 	return fuse_fs_renamex(volicon_get()->next, from, to, flags);
 }
 
-static int
-volicon_link(const char *from, const char *to)
+static int volicon_link(const char *from, const char *to)
 {
 	ERROR_IF_MAGIC_FILE(from, EACCES);
 	ERROR_IF_MAGIC_FILE(to, EACCES);
@@ -203,34 +199,30 @@ volicon_link(const char *from, const char *to)
 	return fuse_fs_link(volicon_get()->next, from, to);
 }
 
-static int
-volicon_setattr_x(const char *path, struct setattr_x *attr)
+static int volicon_setattr_x(const char *path, struct setattr_x *attr)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_setattr_x(volicon_get()->next, path, attr);
 }
 
-static int
-volicon_fsetattr_x(const char *path, struct setattr_x *attr,
-		   struct fuse_file_info *fi)
+static int volicon_fsetattr_x(const char *path, struct setattr_x *attr,
+			      struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_fsetattr_x(volicon_get()->next, path, attr, fi);
 }
 
-static int
-volicon_chflags(const char *path, uint32_t flags)
+static int volicon_chflags(const char *path, uint32_t flags)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_chflags(volicon_get()->next, path, flags);
 }
 
-static int
-volicon_getxtimes(const char *path, struct timespec *bkuptime,
-		  struct timespec *crtime)
+static int volicon_getxtimes(const char *path, struct timespec *bkuptime,
+			     struct timespec *crtime)
 {
 	if (volicon_is_a_magic_file(path)) {
 		bkuptime->tv_sec = 0;
@@ -243,56 +235,50 @@ volicon_getxtimes(const char *path, struct timespec *bkuptime,
 	return fuse_fs_getxtimes(volicon_get()->next, path, bkuptime, crtime);
 }
 
-static int
-volicon_setbkuptime(const char *path, const struct timespec *bkuptime)
+static int volicon_setbkuptime(const char *path,
+			       const struct timespec *bkuptime)
 {
 	ERROR_IF_MAGIC_FILE(path, EPERM);
 
 	return fuse_fs_setbkuptime(volicon_get()->next, path, bkuptime);
 }
 
-static int
-volicon_setchgtime(const char *path, const struct timespec *chgtime)
+static int volicon_setchgtime(const char *path, const struct timespec *chgtime)
 {
 	ERROR_IF_MAGIC_FILE(path, EPERM);
 
 	return fuse_fs_setchgtime(volicon_get()->next, path, chgtime);
 }
 
-static int
-volicon_setcrtime(const char *path, const struct timespec *crtime)
+static int volicon_setcrtime(const char *path, const struct timespec *crtime)
 {
 	ERROR_IF_MAGIC_FILE(path, EPERM);
 
 	return fuse_fs_setcrtime(volicon_get()->next, path, crtime);
 }
 
-static int
-volicon_chmod(const char *path, mode_t mode)
+static int volicon_chmod(const char *path, mode_t mode)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_chmod(volicon_get()->next, path, mode);
 }
 
-static int
-volicon_chown(const char *path, uid_t uid, gid_t gid)
+static int volicon_chown(const char *path, uid_t uid, gid_t gid)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_chown(volicon_get()->next, path, uid, gid);
 }
 
-static int
-volicon_truncate(const char *path, off_t size)
+static int volicon_truncate(const char *path, off_t size)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_truncate(volicon_get()->next, path, size);
 }
 
-static int
-volicon_open(const char *path, struct fuse_file_info *fi)
+static int volicon_open(const char *path, struct fuse_file_info *fi)
 {
 	if (volicon_is_a_magic_file(path)) {
 		if (fi && ((fi->flags & O_ACCMODE) != O_RDONLY)) {
@@ -305,9 +291,9 @@ volicon_open(const char *path, struct fuse_file_info *fi)
 	return fuse_fs_open(volicon_get()->next, path, fi);
 }
 
-static int
-volicon_read_buf(const char *path, struct fuse_bufvec **bufp, size_t size,
-		 off_t offset, struct fuse_file_info *fi)
+static int volicon_read_buf(const char *path, struct fuse_bufvec **bufp,
+			    size_t size, off_t offset,
+			    struct fuse_file_info *fi)
 {
 	int res = 0;
 
@@ -349,17 +335,15 @@ volicon_read_buf(const char *path, struct fuse_bufvec **bufp, size_t size,
 	return res;
 }
 
-static int
-volicon_write_buf(const char *path, struct fuse_bufvec *buf, off_t offset,
-		  struct fuse_file_info *fi)
+static int volicon_write_buf(const char *path, struct fuse_bufvec *buf,
+			     off_t offset, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_write_buf(volicon_get()->next, path, buf, offset, fi);
 }
 
-static int
-volicon_statfs(const char *path, struct statvfs *stbuf)
+static int volicon_statfs(const char *path, struct statvfs *stbuf)
 {
 	if (volicon_is_a_magic_file(path)) {
 		return fuse_fs_statfs(volicon_get()->next, "/", stbuf);
@@ -368,8 +352,7 @@ volicon_statfs(const char *path, struct statvfs *stbuf)
 	return fuse_fs_statfs(volicon_get()->next, path, stbuf);
 }
 
-static int
-volicon_statfs_x(const char *path, struct statfs *stbuf)
+static int volicon_statfs_x(const char *path, struct statfs *stbuf)
 {
 	if (volicon_is_a_magic_file(path)) {
 		return fuse_fs_statfs_x(volicon_get()->next, "/", stbuf);
@@ -378,34 +361,31 @@ volicon_statfs_x(const char *path, struct statfs *stbuf)
 	return fuse_fs_statfs_x(volicon_get()->next, path, stbuf);
 }
 
-static int
-volicon_flush(const char *path, struct fuse_file_info *fi)
+static int volicon_flush(const char *path, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, 0);
 
 	return fuse_fs_flush(volicon_get()->next, path, fi);
 }
 
-static int
-volicon_release(const char *path, struct fuse_file_info *fi)
+static int volicon_release(const char *path, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, 0);
 
 	return fuse_fs_release(volicon_get()->next, path, fi);
 }
 
-static int
-volicon_fsync(const char *path, int isdatasync,
-	      struct fuse_file_info *fi)
+static int volicon_fsync(const char *path, int isdatasync,
+			 struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, 0);
 
 	return fuse_fs_fsync(volicon_get()->next, path, isdatasync, fi);
 }
 
-static int
-volicon_setxattr(const char *path, const char *name, const char *value,
-		 size_t size, int flags, uint32_t position)
+static int volicon_setxattr(const char *path, const char *name,
+			    const char *value, size_t size, int flags,
+			    uint32_t position)
 {
 	ERROR_IF_MAGIC_FILE(path, EPERM);
 
@@ -414,10 +394,12 @@ volicon_setxattr(const char *path, const char *name, const char *value,
 		if ((size >= 8) && (size <= XATTR_FINDERINFO_SIZE)) {
 			char finder_info[XATTR_FINDERINFO_SIZE];
 			memcpy(finder_info, value, size);
-			((struct FndrGenericInfo *)&finder_info)->flags |= ntohs(0x0400);
+			((struct FndrGenericInfo *)&finder_info)->flags |=
+				ntohs(0x0400);
 			//finder_info[8] |= 0x100;
 			return fuse_fs_setxattr(volicon_get()->next, path, name,
-						finder_info, size, flags, position);
+						finder_info, size, flags,
+						position);
 		}
 	}
 
@@ -425,9 +407,8 @@ volicon_setxattr(const char *path, const char *name, const char *value,
 				flags, position);
 }
 
-static int
-volicon_getxattr(const char *path, const char *name, char *value, size_t size,
-		 uint32_t position)
+static int volicon_getxattr(const char *path, const char *name, char *value,
+			    size_t size, uint32_t position)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOATTR);
 
@@ -466,8 +447,7 @@ volicon_getxattr(const char *path, const char *name, char *value, size_t size,
 	return res;
 }
 
-static int
-volicon_listxattr(const char *path, char *list, size_t size)
+static int volicon_listxattr(const char *path, char *list, size_t size)
 {
 	ERROR_IF_MAGIC_FILE(path, 0);
 
@@ -536,8 +516,7 @@ volicon_listxattr(const char *path, char *list, size_t size)
 	return res;
 }
 
-static int
-volicon_removexattr(const char *path, const char *name)
+static int volicon_removexattr(const char *path, const char *name)
 {
 	ERROR_IF_MAGIC_FILE(path, EPERM);
 
@@ -549,41 +528,36 @@ volicon_removexattr(const char *path, const char *name)
 	return fuse_fs_removexattr(volicon_get()->next, path, name);
 }
 
-static int
-volicon_opendir(const char *path, struct fuse_file_info *fi)
+static int volicon_opendir(const char *path, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTDIR);
 
 	return fuse_fs_opendir(volicon_get()->next, path, fi);
 }
 
-static int
-volicon_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-		off_t offset, struct fuse_file_info *fi)
+static int volicon_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+			   off_t offset, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTDIR);
 
 	return fuse_fs_readdir(volicon_get()->next, path, buf, filler, offset, fi);
 }
 
-static int
-volicon_releasedir(const char *path, struct fuse_file_info *fi)
+static int volicon_releasedir(const char *path, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTDIR);
 
 	return fuse_fs_releasedir(volicon_get()->next, path, fi);
 }
 
-static int
-volicon_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi)
+static int volicon_fsyncdir(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTDIR);
 
 	return fuse_fs_fsyncdir(volicon_get()->next, path, isdatasync, fi);
 }
 
-static void *
-volicon_init(struct fuse_conn_info *conn)
+static void *volicon_init(struct fuse_conn_info *conn)
 {
 	struct volicon *d = volicon_get();
 
@@ -592,8 +566,7 @@ volicon_init(struct fuse_conn_info *conn)
 	return d;
 }
 
-static void
-volicon_destroy(void *data)
+static void volicon_destroy(void *data)
 {
 	struct volicon *d = data;
 
@@ -606,8 +579,7 @@ volicon_destroy(void *data)
 	return;
 }
 
-static int
-volicon_access(const char *path, int mask)
+static int volicon_access(const char *path, int mask)
 {
 	if (volicon_is_a_magic_file(path)) {
 		if ((mask & W_OK) || (mask & X_OK)) {
@@ -620,24 +592,24 @@ volicon_access(const char *path, int mask)
 	return fuse_fs_access(volicon_get()->next, path, mask);
 }
 
-static int
-volicon_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+static int volicon_create(const char *path, mode_t mode,
+			  struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, EEXIST);
 
 	return fuse_fs_create(volicon_get()->next, path, mode, fi);
 }
 
-static int
-volicon_ftruncate(const char *path, off_t size, struct fuse_file_info *fi)
+static int volicon_ftruncate(const char *path, off_t size,
+			     struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_ftruncate(volicon_get()->next, path, size, fi);
 }
 
-static int
-volicon_fgetattr(const char *path, struct stat *buf, struct fuse_file_info *fi)
+static int volicon_fgetattr(const char *path, struct stat *buf,
+			    struct fuse_file_info *fi)
 {
 	int res = 0;
 
@@ -659,8 +631,7 @@ volicon_fgetattr(const char *path, struct stat *buf, struct fuse_file_info *fi)
 	return res;
 }
 
-static int
-volicon_lock(const char *path, struct fuse_file_info *fi, int cmd,
+static int volicon_lock(const char *path, struct fuse_file_info *fi, int cmd,
 	     struct flock *lock)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTSUP);
@@ -668,29 +639,27 @@ volicon_lock(const char *path, struct fuse_file_info *fi, int cmd,
 	return fuse_fs_lock(volicon_get()->next, path, fi, cmd, lock);
 }
 
-static int
-volicon_utimens(const char *path, const struct timespec ts[2])
+static int volicon_utimens(const char *path, const struct timespec ts[2])
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
 
 	return fuse_fs_utimens(volicon_get()->next, path, ts);
 }
 
-static int
-volicon_bmap(const char *path, size_t blocksize, uint64_t *idx)
+static int volicon_bmap(const char *path, size_t blocksize, uint64_t *idx)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTSUP);
 
 	return fuse_fs_bmap(volicon_get()->next, path, blocksize, idx);
 }
 
-static int
-volicon_fallocate(const char *path, int mode, off_t offset, off_t length,
-		  struct fuse_file_info *fi)
+static int volicon_fallocate(const char *path, int mode, off_t offset,
+			     off_t length, struct fuse_file_info *fi)
 {
 	ERROR_IF_MAGIC_FILE(path, ENOTSUP);
 
-	return fuse_fs_fallocate(volicon_get()->next, path, mode, offset, length, fi);
+	return fuse_fs_fallocate(volicon_get()->next, path, mode, offset,
+				 length, fi);
 }
 
 /*
@@ -757,16 +726,14 @@ static struct fuse_opt volicon_opts[] = {
 	FUSE_OPT_END
 };
 
-static void
-volicon_help(void)
+static void volicon_help(void)
 {
 	fprintf(stderr,
 		"    -o iconpath=<icon path> display volume with custom icon\n");
 }
 
-static int
-volicon_opt_proc(void *data, const char *arg, int key,
-		 struct fuse_args *outargs)
+static int volicon_opt_proc(void *data, const char *arg, int key,
+			    struct fuse_args *outargs)
 {
 	(void) data;
 	(void) arg;
@@ -780,8 +747,8 @@ volicon_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-static struct fuse_fs *
-volicon_new(struct fuse_args *args, struct fuse_fs *next[])
+static struct fuse_fs *volicon_new(struct fuse_args *args,
+				   struct fuse_fs *next[])
 {
 	int ret;
 	int voliconfd = -1;

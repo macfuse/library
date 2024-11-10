@@ -174,8 +174,7 @@ static const struct fuse_opt fuse_mount_opts[] = {
 	FUSE_OPT_END
 };
 
-static void
-mount_run(const char *mount_args)
+static void mount_run(const char *mount_args)
 {
 	int err;
 
@@ -199,22 +198,19 @@ out:
 	free(mount_cmd);
 }
 
-static void
-mount_help(void)
+static void mount_help(void)
 {
 	mount_run("--help");
 	fputc('\n', stderr);
 }
 
-static void
-mount_version(void)
+static void mount_version(void)
 {
 	mount_run("--version");
 }
 
-static int
-fuse_mount_opt_proc(void *data, const char *arg, int key,
-		    struct fuse_args *outargs)
+static int fuse_mount_opt_proc(void *data, const char *arg, int key,
+			       struct fuse_args *outargs)
 {
 	struct mount_opts *mo = data;
 
@@ -264,8 +260,7 @@ fuse_mount_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-void
-fuse_kern_unmount(DADiskRef disk, int fd)
+void fuse_kern_unmount(DADiskRef disk, int fd)
 {
 	struct stat sbuf;
 	char dev[128];
@@ -300,8 +295,7 @@ fuse_kern_unmount(DADiskRef disk, int fd)
 	DADiskUnmount(disk, kDADiskUnmountOptionDefault, NULL, NULL);
 }
 
-void
-fuse_unmount_compat22(const char *mountpoint)
+void fuse_unmount_compat22(const char *mountpoint)
 {
 	(void)unmount(mountpoint, 0);
 }
@@ -358,8 +352,7 @@ struct fuse_mount_core_wait_arg {
 	void *context;
 };
 
-static void *
-fuse_mount_core_wait(void *arg)
+static void *fuse_mount_core_wait(void *arg)
 {
 	int fd;
 	void (*callback)(void *context, int res);
@@ -398,9 +391,8 @@ out:
 	return NULL;
 }
 
-static int
-fuse_mount_core(const char *mountpoint, const char *opts,
-		void (*callback)(void *, int), void *context)
+static int fuse_mount_core(const char *mountpoint, const char *opts,
+			   void (*callback)(void *, int), void *context)
 {
 	int fd;
 	int result;
@@ -525,9 +517,8 @@ out:
 	return fd;
 }
 
-int
-fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
-		void (*callback)(void *, int), void *context)
+int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
+		    void (*callback)(void *, int), void *context)
 {
 	struct mount_opts mo;
 	int res = -1;
