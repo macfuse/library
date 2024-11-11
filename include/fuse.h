@@ -764,8 +764,8 @@ int fuse_loop_mt(struct fuse *f);
  * FUSE event loop based on libdispatch
  *
  * Requests from the kernel are processed, and the appropriate
- * operations are called.  Request are processed in parallel by
- * distributing them onto an dispatch queue asynchronously.
+ * operations are called.  Request are processed in parallel on
+ * a concurrent dispatch queue.
  *
  * Calling this function requires libdispatch to be linked to
  * the application.
@@ -846,7 +846,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 /**
  * Start the cleanup thread when using option "remember".
  *
- * This is done automatically by fuse_loop_mt()
+ * This is done automatically by fuse_loop_mt() and fuse_loop_dispatch()
  * @param fuse struct fuse pointer for fuse instance
  * @return 0 on success and -1 on error
  */
@@ -855,7 +855,7 @@ int fuse_start_cleanup_thread(struct fuse *fuse);
 /**
  * Stop the cleanup thread when using option "remember".
  *
- * This is done automatically by fuse_loop_mt()
+ * This is done automatically by fuse_loop_mt() and fuse_loop_dispatch()
  * @param fuse struct fuse pointer for fuse instance
  */
 void fuse_stop_cleanup_thread(struct fuse *fuse);
