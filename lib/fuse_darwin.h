@@ -8,22 +8,8 @@
 #ifndef _FUSE_DARWIN_PRIVATE_H_
 #define _FUSE_DARWIN_PRIVATE_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include <pthread.h>
-#include <strhash.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
-#include <time.h>
-
-#include <DiskArbitration/DiskArbitration.h>
-
-#ifdef __cplusplus
-}
-#endif
 
 #ifndef FUSE_DEFAULT_USERKERNEL_BUFSIZE
 #  define FUSE_DEFAULT_USERKERNEL_BUFSIZE 33554432
@@ -57,8 +43,6 @@ extern "C" {
 #endif /* !LOCK_SH */
 
 char *fuse_resource_path(const char *path);
-
-extern DASessionRef fuse_dasession;
 
 #endif /* _FUSE_DARWIN_PRIVATE_H_ */
 

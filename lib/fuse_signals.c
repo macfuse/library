@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2017 Benjamin Fleischer
+ * Copyright (c) 2011-2024 Benjamin Fleischer
  */
 
 #include "fuse_lowlevel.h"
@@ -27,11 +27,18 @@ static void exit_handler(int sig)
 #ifdef __APPLE__
 		struct fuse_chan *ch = fuse_session_next_chan(fuse_instance,
 							      NULL);
-		if (ch)
+		if (ch) {
+			/*
+			 * Note: The volume will not be unmounted in case the
+			 * signal is received before the mount operation has
+			 * been completed (and the DADiskRef has been attached
+			 * to the channel).
+			 */
 			fuse_unmount(NULL, ch);
-#else
+		}
+#else /* __APPLE__ */
 		fuse_session_exit(fuse_instance);
-#endif
+#endif /* __APPLE__ */
 	}
 }
 

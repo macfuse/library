@@ -1877,7 +1877,7 @@ int fuse_chan_fd(struct fuse_chan *ch);
  * Query the disk of the channel
  *
  * @param ch the channel
- * @return the disk set by fuse_mount()
+ * @return the disk set by fuse_mount() (needs to be released)
  */
 DADiskRef fuse_chan_disk(struct fuse_chan *ch);
 

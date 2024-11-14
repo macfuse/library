@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <libproc.h>
 #include <paths.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -264,8 +265,9 @@ void fuse_kern_unmount(DADiskRef disk, int fd)
 {
 	if (!disk) {
 		/*
-		 * Filesystem has already been unmounted, all we need to do is
-		 * make sure fd is closed.
+		 * Filesystem has already been unmounted or has never been
+		 * mounted in the first place, all we need to do is make sure
+		 * that fd is closed.
 		 */
 		if (fd != -1)
 			close(fd);
@@ -280,7 +282,8 @@ void fuse_unmount_compat22(const char *mountpoint)
 	(void)unmount(mountpoint, 0);
 }
 
-/* return value:
+/*
+ * return value:
  * >= 0	 => fd
  * -1	 => error
  */
@@ -307,7 +310,7 @@ static int receive_fd(int sock_fd)
 
 	while (((rv = recvmsg(sock_fd, &msg, 0)) == -1) && errno == EINTR);
 	if (rv == -1) {
-		perror("recvmsg");
+		perror("fuse: recvmsg");
 		return -1;
 	}
 	if (!rv) {
@@ -317,7 +320,7 @@ static int receive_fd(int sock_fd)
 
 	cmsg = CMSG_FIRSTHDR(&msg);
 	if (cmsg->cmsg_type != SCM_RIGHTS) {
-		fprintf(stderr, "got control message of unknown type %d\n",
+		fprintf(stderr, "fuse: received message of unknown type %d\n",
 			cmsg->cmsg_type);
 		return -1;
 	}
@@ -334,37 +337,28 @@ struct fuse_mount_core_wait_arg {
 
 static void *fuse_mount_core_wait(void *arg)
 {
-	int fd;
-	void (*callback)(void *context, int res);
-	void *context;
-
+	struct fuse_mount_core_wait_arg *a =
+		(struct fuse_mount_core_wait_arg *)arg;
 	int32_t status = -1;
 	ssize_t rv = 0;
 
-	{
-		struct fuse_mount_core_wait_arg *a =
-			(struct fuse_mount_core_wait_arg *)arg;
-		fd = a->fd;
-		callback = a->callback;
-		context = a->context;
-	}
-
-	if (!callback) {
+	if (!a->callback) {
 		goto out;
 	}
 
-	while (((rv = recv(fd, &status, sizeof(status), 0)) == -1) &&
+	while (((rv = recv(a->fd, &status, sizeof(status), 0)) == -1) &&
 	       errno == EINTR);
-	if (rv == -1) {
-		perror("receive mount status");
-		goto out;
-	}
-	if (!rv) {
-		/* EOF */
-		goto out;
+	if (rv == -1 || rv == 0) {
+		/*
+		 * We did not receive a mount status, but we still need to
+		 * invoke the callback, otherweise we might leak a->context.
+		 * Assume the mount operation failed with an unknown error.
+		 */
+		status = -1;
+		fprintf(stderr, "fuse: unknown mount status\n");
 	}
 
-	callback(context, status);
+	a->callback(a->context, status);
 
 out:
 	free(arg);
@@ -383,7 +377,7 @@ static int fuse_mount_core(const char *mountpoint, const char *opts,
 	int status;
 
 	if (!mountpoint) {
-		fprintf(stderr, "missing or invalid mount point\n");
+		fprintf(stderr, "fuse: missing or invalid mount point\n");
 		return -1;
 	}
 
@@ -466,20 +460,24 @@ static int fuse_mount_core(const char *mountpoint, const char *opts,
 	close(fds[0]);
 	fd = receive_fd(fds[1]);
 
-	if (callback) {
+	if (fd != -1 && callback) {
+		int res = -1;
+		pthread_t mount_wait_thread = NULL;
+
 		struct fuse_mount_core_wait_arg *arg =
 			calloc(1, sizeof(struct fuse_mount_core_wait_arg));
 		arg->fd = fds[1];
 		arg->callback = callback;
 		arg->context = context;
 
-		pthread_t mount_wait_thread;
-		int res = pthread_create(&mount_wait_thread, NULL,
-					 &fuse_mount_core_wait, (void *)arg);
+		res = fuse_start_thread(&mount_wait_thread,
+					&fuse_mount_core_wait, (void *)arg);
 		if (res) {
 			perror("fuse: failed to wait for mount status");
 			goto mount_err_out;
 		}
+
+		pthread_detach(mount_wait_thread);
 	}
 
 	if (waitpid(pid, &status, 0) == -1 || WEXITSTATUS(status) != 0) {

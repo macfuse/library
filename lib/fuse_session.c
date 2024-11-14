@@ -30,6 +30,11 @@
 #endif
 
 struct fuse_chan {
+#ifdef __APPLE__
+	pthread_mutex_t lock;
+	int retain_count;
+#endif
+
 	struct fuse_chan_ops op;
 
 	struct fuse_session *se;
@@ -171,6 +176,10 @@ static struct fuse_chan *fuse_chan_new_common(struct fuse_chan_ops *op, int fd,
 	}
 
 	memset(ch, 0, sizeof(*ch));
+#ifdef __APPLE__
+	pthread_mutex_init(&ch->lock, NULL);
+	ch->retain_count = 1;
+#endif
 	ch->op = *op;
 	ch->fd = fd;
 	ch->bufsize = bufsize;
@@ -195,26 +204,30 @@ struct fuse_chan *fuse_chan_new_compat24(struct fuse_chan_ops_compat24 *op,
 
 #ifdef __APPLE__
 
-DADiskRef fuse_chan_disk(struct fuse_chan *ch)
+void fuse_chan_retain(struct fuse_chan *ch)
 {
-	return ch->disk;
+	pthread_mutex_lock(&ch->lock);
+	ch->retain_count++;
+	pthread_mutex_unlock(&ch->lock);
 }
 
-void fuse_chan_set_disk(struct fuse_chan *ch, DADiskRef disk)
+void fuse_chan_release(struct fuse_chan *ch)
 {
-	if (ch->disk)
-		CFRelease(ch->disk);
-	if (disk)
-		CFRetain(disk);
-	ch->disk = disk;
+	bool release = false;
+
+	pthread_mutex_lock(&ch->lock);
+	release = --ch->retain_count == 0;
+	pthread_mutex_unlock(&ch->lock);
+
+	if (release) {
+		pthread_mutex_destroy(&ch->lock);
+		if (ch->disk)
+			CFRelease(ch->disk);
+		free(ch);
+	}
 }
 
-void fuse_chan_cleardisk(struct fuse_chan *ch)
-{
-	fuse_chan_set_disk(ch, NULL);
-}
-
-#endif /* __APPLE__ */
+#endif
 
 int fuse_chan_fd(struct fuse_chan *ch)
 {
@@ -227,6 +240,44 @@ int fuse_chan_clearfd(struct fuse_chan *ch)
 	ch->fd = -1;
 	return fd;
 }
+
+#ifdef __APPLE__
+
+DADiskRef fuse_chan_disk(struct fuse_chan *ch)
+{
+	DADiskRef disk = NULL;
+
+	pthread_mutex_lock(&ch->lock);
+	disk = ch->disk;
+	if (disk)
+		CFRetain(disk);
+	pthread_mutex_unlock(&ch->lock);
+
+	return disk;
+}
+
+void fuse_chan_set_disk(struct fuse_chan *ch, DADiskRef disk)
+{
+	DADiskRef old = NULL;
+
+	if (disk)
+		CFRetain(disk);
+
+	pthread_mutex_lock(&ch->lock);
+	old = ch->disk;
+	ch->disk = disk;
+	pthread_mutex_unlock(&ch->lock);
+
+	if (old)
+		CFRelease(old);
+}
+
+void fuse_chan_cleardisk(struct fuse_chan *ch)
+{
+	fuse_chan_set_disk(ch, NULL);
+}
+
+#endif /* __APPLE__ */
 
 size_t fuse_chan_bufsize(struct fuse_chan *ch)
 {
@@ -272,10 +323,10 @@ void fuse_chan_destroy(struct fuse_chan *ch)
 	if (ch->op.destroy)
 		ch->op.destroy(ch);
 #ifdef __APPLE__
-	if (ch->disk)
-		CFRelease(ch->disk);
-#endif
+	fuse_chan_release(ch);
+#else
 	free(ch);
+#endif
 }
 
 #if !defined(__FreeBSD__) && !defined(__APPLE__)

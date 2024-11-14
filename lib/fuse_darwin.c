@@ -83,23 +83,3 @@ char *fuse_resource_path(const char *path)
 
 	return resource_path;
 }
-
-/********************/
-
-DASessionRef fuse_dasession;
-
-static void fuse_lib_constructor(void) __attribute__((constructor));
-static void fuse_lib_destructor(void)  __attribute__((destructor));
-
-static void
-fuse_lib_constructor(void)
-{
-	fuse_dasession = DASessionCreate(NULL);
-}
-
-static void
-fuse_lib_destructor(void)
-{
-	CFRelease(fuse_dasession);
-	fuse_dasession = NULL;
-}

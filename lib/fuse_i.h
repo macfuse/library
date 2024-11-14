@@ -115,6 +115,11 @@ struct fuse_session *fuse_lowlevel_new_common(struct fuse_args *args,
 
 void fuse_kern_unmount_compat22(const char *mountpoint);
 
+#ifdef __APPLE__
+void fuse_chan_retain(struct fuse_chan *ch);
+void fuse_chan_release(struct fuse_chan *ch);
+#endif
+
 int fuse_chan_clearfd(struct fuse_chan *ch);
 
 #ifdef __APPLE__
