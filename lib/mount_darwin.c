@@ -262,10 +262,6 @@ static int fuse_mount_opt_proc(void *data, const char *arg, int key,
 
 void fuse_kern_unmount(DADiskRef disk, int fd)
 {
-	struct stat sbuf;
-	char dev[128];
-	char *ep, *rp = NULL, *umount_cmd;
-
 	if (!disk) {
 		/*
 		 * Filesystem has already been unmounted, all we need to do is
@@ -273,22 +269,6 @@ void fuse_kern_unmount(DADiskRef disk, int fd)
 		 */
 		if (fd != -1)
 			close(fd);
-		return;
-	}
-
-	if (fstat(fd, &sbuf) == -1) {
-		return;
-	}
-
-	devname_r(sbuf.st_rdev, S_IFCHR, dev, 128);
-
-	if (strncmp(dev, OSXFUSE_DEVICE_BASENAME,
-		    sizeof(OSXFUSE_DEVICE_BASENAME) - 1)) {
-		return;
-	}
-
-	strtol(dev + sizeof(OSXFUSE_DEVICE_BASENAME) - 1, &ep, 10);
-	if (*ep != '\0') {
 		return;
 	}
 
