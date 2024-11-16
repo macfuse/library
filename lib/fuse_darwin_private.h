@@ -56,8 +56,6 @@ extern "C" {
 #  define LOCK_UN         0x08            /* unlock file */
 #endif /* !LOCK_SH */
 
-const char *osxfuse_version(void);
-
 char *fuse_resource_path(const char *path);
 
 extern DASessionRef fuse_dasession;

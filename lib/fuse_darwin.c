@@ -22,19 +22,12 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
-const char *
-osxfuse_version(void)
-{
-	return OSXFUSE_VERSION;
-}
-
 /* Resource paths */
 
 #define EXECUTABLE_PATH "@executable_path/"
 #define LOADER_PATH "@loader_path/"
 
-char *
-fuse_resource_path(const char *path)
+char *fuse_resource_path(const char *path)
 {
 	char base_path[MAXPATHLEN];
 	char *relative_path = NULL;
