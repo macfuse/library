@@ -13,7 +13,7 @@
 
 #include "fuse_i.h"
 #include "fuse_opt.h"
-#include "fuse_darwin_private.h"
+#include "fuse_darwin.h"
 
 #include <errno.h>
 #include <fcntl.h>

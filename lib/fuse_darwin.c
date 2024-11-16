@@ -5,7 +5,7 @@
  */
 
 #include "fuse_i.h"
-#include "fuse_darwin_private.h"
+#include "fuse_darwin.h"
 
 #include <dlfcn.h>
 #include <errno.h>

@@ -21,7 +21,7 @@
 #include "fuse_common_compat.h"
 #include "fuse_lowlevel_compat.h"
 #ifdef __APPLE__
-#  include "fuse_darwin_private.h"
+#  include "fuse_darwin.h"
 #endif
 
 #include <stdio.h>
