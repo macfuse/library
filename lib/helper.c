@@ -261,7 +261,6 @@ __attribute__((destructor))
 static void fuse_dasession_destroy(void)
 {
 	CFRelease(fuse_dasession);
-	fuse_dasession = NULL;
 }
 
 struct fuse_mount_context {
