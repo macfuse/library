@@ -306,6 +306,17 @@ struct fuse_chan *fuse_mount(const char *mountpoint, struct fuse_args *args);
 void fuse_unmount(const char *mountpoint, struct fuse_chan *ch);
 
 /**
+ * Loop type for processing file system requests
+ *
+ * FUSE_LOOP_SINGLE_THREADED: process requests serially
+ * FUSE_LOOP_MULTI_THREADED: process requests in parallel
+ * FUSE_LOOP_DISPATCH: process requests in parallel, based on libdispatch
+ */
+#define FUSE_LOOP_SINGLE_THREADED	0
+#define FUSE_LOOP_MULTI_THREADED	1
+#define FUSE_LOOP_DISPATCH		2
+
+/**
  * Parse common options
  *
  * The following options are parsed:
@@ -315,14 +326,16 @@ void fuse_unmount(const char *mountpoint, struct fuse_chan *ch);
  *   '-s'	     single threaded
  *   '-h' '--help'   help
  *   '-ho'	     help without header
- *   '-ofsname=..'   file system name, if not present, then set to the program
+ *   '-oloop=...'    loop type for processing file system requests
+ *		     (single_threaded, multi_threaded, dispatch)
+ *   '-ofsname=...'  file system name, if not present, then set to the program
  *		     name
  *
  * All parameters may be NULL
  *
  * @param args argument vector
  * @param mountpoint the returned mountpoint, should be freed after use
- * @param multithreaded set to 1 unless the '-s' option is present
+ * @param multithreaded set to 1 unless the options '-s' or 'loop' are present
  * @param foreground set to 1 if one of the relevant options is present
  * @return 0 on success, -1 on failure
  */

@@ -33,7 +33,7 @@ int fuse_session_loop_dispatch(struct fuse_session *se)
 	dispatch_queue_t queue = NULL;
 	dispatch_group_t group = NULL;
 
-	buf = (char *) malloc(bufsize);
+	buf = (char *)malloc(bufsize);
 	if (!buf) {
 		fprintf(stderr, "fuse: failed to allocate read buffer\n");
 		res = -1;
@@ -73,7 +73,7 @@ int fuse_session_loop_dispatch(struct fuse_session *se)
 		 * Create a local buffer and copy because buf is huge, and the
 		 * data transferred is usually orders of magnitude smaller.
 		 */
-		char *process_buf = (char *) malloc(res);
+		char *process_buf = (char *)malloc(res);
 		if (!process_buf) {
 			fprintf(stderr,
 				"fuse: failed to allocate process buffer\n");
@@ -97,8 +97,10 @@ int fuse_session_loop_dispatch(struct fuse_session *se)
 
 out:
 	free(buf);
-	if (group) dispatch_release(group);
-	if (queue) dispatch_release(queue);
+	if (group)
+		dispatch_release(group);
+	if (queue)
+		dispatch_release(queue);
 	fuse_session_reset(se);
 
 	return res < 0 ? -1 : 0;

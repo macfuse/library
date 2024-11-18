@@ -42,8 +42,9 @@ enum  {
 };
 
 struct helper_opts {
-	int singlethread;
 	int foreground;
+	int singlethread;
+	char *loop;
 	int nodefault_subtype;
 	char *mountpoint;
 };
@@ -55,6 +56,7 @@ static const struct fuse_opt fuse_helper_opts[] = {
 	FUSE_HELPER_OPT("debug",	foreground),
 	FUSE_HELPER_OPT("-f",		foreground),
 	FUSE_HELPER_OPT("-s",		singlethread),
+	FUSE_HELPER_OPT("loop=%s", 	loop),
 	FUSE_HELPER_OPT("fsname=",	nodefault_subtype),
 	FUSE_HELPER_OPT("subtype=",	nodefault_subtype),
 
@@ -184,13 +186,29 @@ int fuse_parse_cmdline(struct fuse_args *args, char **mountpoint,
 	else
 		free(hopts.mountpoint);
 
-	if (multithreaded)
-		*multithreaded = !hopts.singlethread;
+	if (multithreaded) {
+		if (hopts.singlethread)
+			*multithreaded = FUSE_LOOP_SINGLE_THREADED;
+		else if (hopts.loop) {
+			if (strcmp(hopts.loop, "single_threaded") == 0)
+				*multithreaded = FUSE_LOOP_SINGLE_THREADED;
+			else if (strcmp(hopts.loop, "multi_threaded") == 0)
+				*multithreaded = FUSE_LOOP_MULTI_THREADED;
+			else if (strcmp(hopts.loop, "dispatch") == 0)
+				*multithreaded = FUSE_LOOP_DISPATCH;
+			else {
+				fprintf(stderr, "fuse: invalid option loop\n");
+				goto err;
+			}
+		} else
+			*multithreaded = FUSE_LOOP_MULTI_THREADED;
+	}
 	if (foreground)
 		*foreground = hopts.foreground;
 	return 0;
 
 err:
+	free(hopts.loop);
 	free(hopts.mountpoint);
 	return -1;
 }
@@ -518,15 +536,14 @@ static int fuse_main_common(int argc, char *argv[],
 	if (fuse == NULL)
 		return 1;
 
-	if (multithreaded) {
-#if HAVE_DISPATCH_DISPATCH_H
-		res = fuse_loop_dispatch(fuse);
-#else
-		res = fuse_loop_mt(fuse);
-#endif
-	} else {
+	if (multithreaded == FUSE_LOOP_SINGLE_THREADED)
 		res = fuse_loop(fuse);
-	}
+	else if (multithreaded == FUSE_LOOP_MULTI_THREADED)
+		res = fuse_loop_mt(fuse);
+	else if (multithreaded == FUSE_LOOP_DISPATCH)
+		res = fuse_loop_dispatch(fuse);
+	else
+		return 1;
 
 	fuse_teardown_common(fuse, mountpoint);
 	if (res == -1)
