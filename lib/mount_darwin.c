@@ -182,7 +182,7 @@ static void mount_run(const char *mount_args)
 	char *mount_prog_path;
 	char *mount_cmd;
 
-	mount_prog_path = fuse_resource_path(OSXFUSE_MOUNT_PROG);
+	mount_prog_path = fuse_resource_path(MF_MOUNT_PROG);
 	if (!mount_prog_path) {
 		fprintf(stderr, "fuse: mount program missing\n");
 		goto out;
@@ -387,7 +387,7 @@ static int fuse_mount_core(const char *mountpoint, const char *opts,
 		goto out;
 	}
 
-	mount_prog_path = fuse_resource_path(OSXFUSE_MOUNT_PROG);
+	mount_prog_path = fuse_resource_path(MF_MOUNT_PROG);
 	if (!mount_prog_path) {
 		fprintf(stderr, "fuse: mount program missing\n");
 		return -1;
