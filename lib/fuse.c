@@ -5468,7 +5468,7 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 		f->conf.volicon = NULL;
 	}
 	if (!f->conf.iconpath) {
-		char *iconpath = fuse_resource_path(MF_VOLUME_ICON);
+		char *iconpath = fuse_resource_path(FUSE_VOLUME_ICON);
 		if (access(iconpath, F_OK) == 0) {
 			add_module_volicon = true;
 			f->conf.iconpath = iconpath;

@@ -15,12 +15,12 @@
 #  define FUSE_DEFAULT_USERKERNEL_BUFSIZE 33554432
 #endif
 
-#ifndef MF_MOUNT_PROG
-#  define MF_MOUNT_PROG "/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse"
+#ifndef FUSE_MOUNT_PROG
+#  define FUSE_MOUNT_PROG "/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse"
 #endif
 
-#ifndef MF_VOLUME_ICON
-#  define MF_VOLUME_ICON "/Library/Filesystems/macfuse.fs/Contents/Resources/Volume.icns"
+#ifndef FUSE_VOLUME_ICON
+#  define FUSE_VOLUME_ICON "/Library/Filesystems/macfuse.fs/Contents/Resources/Volume.icns"
 #endif
 
 // Mark the daemon as dead
