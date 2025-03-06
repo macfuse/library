@@ -1,6 +1,7 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2017-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file COPYING.LIB
@@ -10,6 +11,14 @@
 #include "fuse_lowlevel.h"
 
 #include <stdbool.h>
+
+#ifdef __APPLE__
+#include <DiskArbitration/DiskArbitration.h>
+#endif
+
+#if defined(__APPLE__) && defined(MIN)
+#undef MIN
+#endif
 
 #define MIN(a, b) \
 ({									\
@@ -51,7 +60,12 @@ struct fuse_notify_req {
 };
 
 struct fuse_session {
+#ifdef __APPLE__
+	int ctr;
+	DADiskRef disk;
+#else
 	char *mountpoint;
+#endif
 	volatile int exited;
 	int fd;
 	struct fuse_custom_io *io;
@@ -154,6 +168,25 @@ struct fuse_loop_config
 };
 #endif
 
+#ifdef __APPLE__
+
+/**
+ * Obtain counted reference to the session
+ *
+ * @param ch the session
+ * @return the session
+ */
+struct fuse_session *fuse_session_get(struct fuse_session *se);
+
+/**
+ * Drop counted reference to a session
+ *
+ * @param ch the session
+ */
+void fuse_session_put(struct fuse_session *se);
+
+#endif
+
 /* ----------------------------------------------------------- *
  * Channel interface (when using -o clone_fd)		       *
  * ----------------------------------------------------------- */
@@ -177,8 +210,19 @@ struct mount_opts *parse_mount_opts(struct fuse_args *args);
 void destroy_mount_opts(struct mount_opts *mo);
 void fuse_mount_version(void);
 unsigned get_max_read(struct mount_opts *o);
+
+#ifdef __APPLE__
+void fuse_kern_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd);
+#else
 void fuse_kern_unmount(const char *mountpoint, int fd);
+#endif
+
+#ifdef __APPLE__
+int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo,
+		    void (*callback)(void *, int), void *context);
+#else
 int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo);
+#endif
 
 int fuse_send_reply_iov_nofree(fuse_req_t req, int error, struct iovec *iov,
 			       int count);

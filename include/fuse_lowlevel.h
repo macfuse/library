@@ -1,6 +1,8 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh / Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file COPYING.LIB.
@@ -31,6 +33,11 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/uio.h>
+
+#ifdef __APPLE__
+#include <sys/param.h>
+#include <sys/mount.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -101,6 +108,58 @@ struct fuse_entry_param {
 	double entry_timeout;
 };
 
+#ifdef __APPLE__
+
+/**
+ * Directory entry parameters supplied to fuse_reply_entry() when the Darwin
+ * extensions are enabled
+ */
+struct fuse_darwin_entry_param {
+	/** Unique inode number
+	 *
+	 * In lookup, zero means negative entry (from version 2.5)
+	 * Returning ENOENT also means negative entry, but by setting zero
+	 * ino the kernel may cache negative entries for entry_timeout
+	 * seconds.
+	 */
+	fuse_ino_t ino;
+
+	/** Generation number for this entry.
+	 *
+	 * If the file system will be exported over NFS, the
+	 * ino/generation pairs need to be unique over the file
+	 * system's lifetime (rather than just the mount time). So if
+	 * the file system reuses an inode after it has been deleted,
+	 * it must assign a new, previously unused generation number
+	 * to the inode at the same time.
+	 *
+	 */
+	uint64_t generation;
+
+	/** Inode attributes.
+	 *
+	 * Even if attr_timeout == 0, attr must be correct. For example,
+	 * for open(), FUSE uses attr.st_size from lookup() to determine
+	 * how many bytes to request. If this value is not correct,
+	 * incorrect data will be returned.
+	 */
+	struct fuse_darwin_attr attr;
+
+	/** Validity timeout (in seconds) for inode attributes. If
+	    attributes only change as a result of requests that come
+	    through the kernel, this should be set to a very large
+	    value. */
+	double attr_timeout;
+
+	/** Validity timeout (in seconds) for the name. If directory
+	    entries are changed/deleted only as a result of requests
+	    that come through the kernel, this should be set to a very
+	    large value. */
+	double entry_timeout;
+};
+
+#endif
+
 /**
  * Additional context associated with requests.
  *
@@ -168,6 +227,12 @@ enum fuse_notify_entry_flags {
 #define FUSE_SET_ATTR_OPEN	(1 << 15)
 #define FUSE_SET_ATTR_TIMES_SET	(1 << 16)
 #define FUSE_SET_ATTR_TOUCH	(1 << 17)
+#ifdef __APPLE__
+#define FUSE_SET_ATTR_CRTIME	(1 << 28)
+#define FUSE_SET_ATTR_CHGTIME	(1 << 29)
+#define FUSE_SET_ATTR_BKUPTIME	(1 << 30)
+#define FUSE_SET_ATTR_FLAGS	(1 << 31)
+#endif
 
 /* ----------------------------------------------------------- *
  * Request methods and replies				       *
@@ -342,8 +407,14 @@ struct fuse_lowlevel_ops {
 	 * @param to_set bit mask of attributes which should be set
 	 * @param fi file information, or NULL
 	 */
-	void (*setattr) (fuse_req_t req, fuse_ino_t ino, struct stat *attr,
-			 int to_set, struct fuse_file_info *fi);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		setattr,
+		void (*) (fuse_req_t req, fuse_ino_t ino, struct stat *attr,
+			  int to_set, struct fuse_file_info *fi),
+		void (*) (fuse_req_t req, fuse_ino_t ino,
+			  struct fuse_darwin_attr *attr, int to_set,
+			  struct fuse_file_info *fi)
+	)
 
 	/**
 	 * Read symbolic link
@@ -847,8 +918,14 @@ struct fuse_lowlevel_ops {
 	 * Valid replies:
 	 *   fuse_reply_err
 	 */
-	void (*setxattr) (fuse_req_t req, fuse_ino_t ino, const char *name,
-			  const char *value, size_t size, int flags);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		setxattr,
+		void (*) (fuse_req_t req, fuse_ino_t ino, const char *name,
+			  const char *value, size_t size, int flags),
+		void (*) (fuse_req_t req, fuse_ino_t ino, const char *name,
+			  const char *value, size_t size, int flags,
+			  uint32_t position)
+	)
 
 	/**
 	 * Get an extended attribute
@@ -878,8 +955,13 @@ struct fuse_lowlevel_ops {
 	 * @param name of the extended attribute
 	 * @param size maximum size of the value to send
 	 */
-	void (*getxattr) (fuse_req_t req, fuse_ino_t ino, const char *name,
-			  size_t size);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		getxattr,
+		void (*) (fuse_req_t req, fuse_ino_t ino, const char *name,
+			  size_t size),
+		void (*) (fuse_req_t req, fuse_ino_t ino, const char *name,
+			  size_t size, uint32_t position)
+	)
 
 	/**
 	 * List extended attribute names
@@ -1325,6 +1407,23 @@ struct fuse_lowlevel_ops {
 	void (*tmpfile) (fuse_req_t req, fuse_ino_t parent,
 			mode_t mode, struct fuse_file_info *fi);
 
+#ifdef __APPLE__
+	/**
+	 * Rename the mounted volume
+	 *
+	 * If this request is answered with an error code of ENOSYS, this is
+	 * treated as a permanent failure, i.e. all future setvolname() requests
+	 * will fail with the same error code without being send to the
+	 * filesystem process.
+	 *
+	 * Valid replies:
+	 *   fuse_reply_err
+	 *
+	 * @param req request handle
+	 * @param name new volume name
+	 */
+	void (*setvolname) (fuse_req_t req, const char *name);
+#endif
 };
 
 /**
@@ -1375,7 +1474,11 @@ void fuse_reply_none(fuse_req_t req);
  * @param e the entry parameters
  * @return zero for success, -errno for failure to send reply
  */
-int fuse_reply_entry(fuse_req_t req, const struct fuse_entry_param *e);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_reply_entry,
+	int (fuse_req_t req, const struct fuse_entry_param *e),
+	int (fuse_req_t req, const struct fuse_darwin_entry_param *e)
+)
 
 /**
  * Reply with a directory entry and open parameters
@@ -1395,8 +1498,13 @@ int fuse_reply_entry(fuse_req_t req, const struct fuse_entry_param *e);
  * @param fi file information
  * @return zero for success, -errno for failure to send reply
  */
-int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
-		      const struct fuse_file_info *fi);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_reply_create,
+	int (fuse_req_t req, const struct fuse_entry_param *e,
+	     const struct fuse_file_info *fi),
+	int (fuse_req_t req, const struct fuse_darwin_entry_param *e,
+	     const struct fuse_file_info *fi)
+)
 
 /**
  * Reply with attributes
@@ -1409,8 +1517,12 @@ int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
  * @param attr_timeout	validity timeout (in seconds) for the attributes
  * @return zero for success, -errno for failure to send reply
  */
-int fuse_reply_attr(fuse_req_t req, const struct stat *attr,
-		    double attr_timeout);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_reply_attr,
+	int (fuse_req_t req, const struct stat *attr, double attr_timeout),
+	int (fuse_req_t req, const struct fuse_darwin_attr *attr,
+	     double attr_timeout)
+)
 
 /**
  * Reply with the contents of a symbolic link
@@ -1549,7 +1661,11 @@ int fuse_reply_iov(fuse_req_t req, const struct iovec *iov, int count);
  * @param stbuf filesystem statistics
  * @return zero for success, -errno for failure to send reply
  */
-int fuse_reply_statfs(fuse_req_t req, const struct statvfs *stbuf);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_reply_statfs,
+	int (fuse_req_t req, const struct statvfs *stbuf),
+	int (fuse_req_t req, const struct statfs *stbuf)
+)
 
 /**
  * Reply with needed buffer size
@@ -1618,9 +1734,13 @@ int fuse_reply_bmap(fuse_req_t req, uint64_t idx);
  * @param off the offset of the next entry
  * @return the space needed for the entry
  */
-size_t fuse_add_direntry(fuse_req_t req, char *buf, size_t bufsize,
-			 const char *name, const struct stat *stbuf,
-			 off_t off);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_add_direntry,
+	size_t (fuse_req_t req, char *buf, size_t bufsize, const char *name,
+		const struct stat *stbuf, off_t off),
+	size_t (fuse_req_t req, char *buf, size_t bufsize, const char *name,
+		const struct fuse_darwin_attr *attr, off_t off)
+)
 
 /**
  * Add a directory entry to the buffer with the attributes
@@ -1635,9 +1755,13 @@ size_t fuse_add_direntry(fuse_req_t req, char *buf, size_t bufsize,
  * @param off the offset of the next entry
  * @return the space needed for the entry
  */
-size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
-			      const char *name,
-			      const struct fuse_entry_param *e, off_t off);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_add_direntry_plus,
+	size_t (fuse_req_t req, char *buf, size_t bufsize, const char *name,
+		const struct fuse_entry_param *e, off_t off),
+	size_t (fuse_req_t req, char *buf, size_t bufsize, const char *name,
+		const struct fuse_darwin_entry_param *e, off_t off)
+)
 
 /**
  * Reply to ask for data fetch and output buffer preparation.  ioctl
@@ -2091,6 +2215,9 @@ fuse_session_new_fn(struct fuse_args *args, const struct fuse_lowlevel_ops *op,
 		.major = FUSE_MAJOR_VERSION,
 		.minor = FUSE_MINOR_VERSION,
 		.hotfix = FUSE_HOTFIX_VERSION,
+#ifdef __APPLE__
+		.darwin_extensions_enabled = FUSE_DARWIN_ENABLE_EXTENSIONS,
+#endif
 		.padding = 0
 	};
 

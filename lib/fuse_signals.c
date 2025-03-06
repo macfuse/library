@@ -1,6 +1,8 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh/Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   Utility functions for setting signal handlers.
 
@@ -22,6 +24,10 @@
 #include <execinfo.h>
 #endif
 
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
+
 static int teardown_sigs[] = { SIGHUP, SIGINT, SIGTERM };
 static int ignore_sigs[] = { SIGPIPE};
 static int fail_sigs[] = { SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGSEGV };
@@ -29,6 +35,28 @@ static struct fuse_session *fuse_instance;
 
 #define BT_STACK_SZ (1024 * 1024)
 static void *backtrace_buffer[BT_STACK_SZ];
+
+#ifdef __APPLE__
+
+static dispatch_queue_t fuse_signal_queue;
+
+static dispatch_source_t
+teardown_sources[sizeof(teardown_sigs) / sizeof(teardown_sigs[0])];
+
+__attribute__((constructor))
+static void fuse_signal_init(void)
+{
+	fuse_signal_queue = dispatch_queue_create("fuse_signal_queue",
+						  DISPATCH_QUEUE_SERIAL);
+}
+
+__attribute__((destructor))
+static void fuse_signal_destroy(void)
+{
+	dispatch_release(fuse_signal_queue);
+}
+
+#endif
 
 static void dump_stack(void)
 {
@@ -51,6 +79,19 @@ static void dump_stack(void)
 #endif
 }
 
+#ifdef __APPLE__
+
+static void exit_handler(int sig)
+{
+	if (fuse_instance == NULL)
+		return;
+
+	fuse_instance->error = sig;
+	fuse_session_unmount(fuse_instance);
+}
+
+#else
+
 static void exit_handler(int sig)
 {
 	if (fuse_instance == NULL)
@@ -68,6 +109,8 @@ static void exit_handler(int sig)
 
 	fuse_instance->error = sig;
 }
+
+#endif
 
 static void exit_backtrace(int sig)
 {
@@ -135,15 +178,62 @@ static int _fuse_set_signal_handlers(int signals[], int nr_signals,
 	return 0;
 }
 
+#ifdef __APPLE__
+
+static int _fuse_set_signal_sources(dispatch_source_t sources[], int signals[],
+				    int nr_signals, void (*handler)(int))
+{
+	for (int idx = 0; idx < nr_signals; idx++) {
+		int signal = signals[idx];
+		dispatch_source_t source = sources[idx];
+
+		if (source) {
+			fuse_log(FUSE_LOG_ERR,
+				 "fuse: cannot register source for signal %d",
+				 signal);
+			return -1;
+		}
+		source = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL,
+						signal, 0, fuse_signal_queue);
+		if (!source) {
+			fuse_log(FUSE_LOG_ERR,
+				 "fuse: failed to create signal source for "
+				 "signal %d\n",
+				 signal);
+			return -1;
+		}
+		dispatch_source_set_event_handler(source, ^{
+			handler(signal);
+		});
+
+		dispatch_resume(source);
+		sources[idx] = source;
+	}
+
+	return 0;
+}
+
+#endif
+
 int fuse_set_signal_handlers(struct fuse_session *se)
 {
 	size_t nr_signals;
 	int rc;
 
 	nr_signals = sizeof(teardown_sigs) / sizeof(teardown_sigs[0]);
+#ifdef __APPLE__
+	rc = _fuse_set_signal_handlers(teardown_sigs, nr_signals, do_nothing);
+	if (rc < 0)
+		return rc;
+	rc = _fuse_set_signal_sources(teardown_sources, teardown_sigs,
+				      nr_signals, exit_handler);
+	if (rc < 0)
+		return rc;
+#else
 	rc = _fuse_set_signal_handlers(teardown_sigs, nr_signals, exit_handler);
 	if (rc < 0)
 		return rc;
+#endif
 
 	nr_signals = sizeof(ignore_sigs) / sizeof(ignore_sigs[0]);
 	rc = _fuse_set_signal_handlers(ignore_sigs, nr_signals, do_nothing);
@@ -177,6 +267,22 @@ static void _fuse_remove_signal_handlers(int signals[], int nr_signals,
 		set_one_signal_handler(signals[idx], handler, 1);
 }
 
+#ifdef __APPLE__
+
+static void _fuse_remove_signal_sources(dispatch_source_t sources[],
+					int nr_sources)
+{
+	for (int idx = 0; idx < nr_sources; idx++) {
+		dispatch_source_t source = sources[idx];
+		if (source != NULL) {
+			dispatch_release(source);
+			sources[idx] = NULL;
+		}
+	}
+}
+
+#endif
+
 void fuse_remove_signal_handlers(struct fuse_session *se)
 {
 	size_t nr_signals;
@@ -188,7 +294,12 @@ void fuse_remove_signal_handlers(struct fuse_session *se)
 		fuse_instance = NULL;
 
 	nr_signals = sizeof(teardown_sigs) / sizeof(teardown_sigs[0]);
+#ifdef __APPLE__
+	_fuse_remove_signal_handlers(teardown_sigs, nr_signals, do_nothing);
+	_fuse_remove_signal_sources(teardown_sources, nr_signals);
+#else
 	_fuse_remove_signal_handlers(teardown_sigs, nr_signals, exit_handler);
+#endif
 
 	nr_signals = sizeof(ignore_sigs) / sizeof(ignore_sigs[0]);
 	_fuse_remove_signal_handlers(ignore_sigs, nr_signals, do_nothing);

@@ -6,6 +6,9 @@ libfuse_sources = ['fuse.c', 'fuse_i.h', 'fuse_loop.c', 'fuse_loop_mt.c',
 
 if host_machine.system().startswith('linux')
    libfuse_sources += [ 'mount.c' ]
+elif host_machine.system() == 'darwin'
+   libfuse_sources += [ 'fuse_darwin.c', 'mount_darwin.c', 'modules/threadid.c',
+                        'modules/volicon.c' ]
 else
    libfuse_sources += [ 'mount_bsd.c' ]
 endif
@@ -27,9 +30,25 @@ endif
 if host_machine.system().startswith('netbsd')
    deps += [ cc.find_library('perfuse'),
              cc.find_library('puffs') ]
+elif host_machine.system() == 'darwin'
+   deps += [ dependency('appleframeworks', modules: 'CoreFoundation'),
+             dependency('appleframeworks', modules: 'DiskArbitration') ]
 else
    # Required for clock_gettime before glibc 2.17
    deps += cc.find_library('rt')
+endif
+
+if host_machine.system() == 'darwin'
+   libfuse_link_args =  []
+else
+   libfuse_link_args += [ '-Wl,--version-script,' + meson.current_source_dir()
+                          + '/fuse_versionscript' ]
+endif
+
+if host_machine.system() == 'darwin'
+   # Disabling Darwin extensions makes sure symbol variants with the $DARWIN
+   # suffix do not hide vanilla symbols. Required for building libfuse.
+   add_project_arguments('-DFUSE_DARWIN_ENABLE_EXTENSIONS=0', language: 'c')
 endif
 
 fusermount_path = join_paths(get_option('prefix'), get_option('bindir'))
@@ -43,8 +62,7 @@ libfuse = library('fuse3',
                   link_depends: 'fuse_versionscript',
                   c_args: [ '-DFUSE_USE_VERSION=317',
                             '-DFUSERMOUNT_DIR="@0@"'.format(fusermount_path) ],
-                  link_args: ['-Wl,--version-script,' + meson.current_source_dir()
-                              + '/fuse_versionscript' ])
+                  link_args: libfuse_link_args)
 
 pkg = import('pkgconfig')
 pkg.generate(libraries: [ libfuse, '-lpthread' ],

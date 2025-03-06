@@ -1,6 +1,7 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (c) 2025  Benjamin Fleischer
 
   Implementation of the multi-threaded FUSE session loop.
 
@@ -22,12 +23,38 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#ifndef __APPLE__
 #include <semaphore.h>
+#endif
 #include <errno.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <assert.h>
 #include <limits.h>
+
+#ifdef __APPLE__
+
+/*
+ * Unnamed semaphores are not available on macOS. We use dispatch semaphores as
+ * fallback.
+ *
+ * Unlike unnamed semaphores, dispatch semaphores are not async-signal safe.
+ * This means using dispatch semaphores in signal handlers is not safe. This
+ * is not an issue here since we do not use semaphores in signal handlers.
+ *
+ * Unlike sem_wait(), dispatch_semmaphore_wait() is not interruptible. This is
+ * not an issue here since we do not rely on sem_wait() being interruptible.
+ */
+
+#include <dispatch/dispatch.h>
+
+#define sem_t dispatch_semaphore_t
+#define sem_init(s, p, v) *(s) = dispatch_semaphore_create((v))
+#define sem_post(s) dispatch_semaphore_signal(*(s))
+#define sem_wait(s) dispatch_semaphore_wait(*(s), DISPATCH_TIME_FOREVER)
+#define sem_destroy(s) dispatch_release(*(s))
+
+#endif /* __APPLE__ */
 
 /* Environment var controlling the thread stack size */
 #define ENVNAME_THREAD_STACK "FUSE_THREAD_STACK"
@@ -132,7 +159,11 @@ static void *fuse_do_work(void *data)
 	struct fuse_worker *w = (struct fuse_worker *) data;
 	struct fuse_mt *mt = w->mt;
 
+#ifdef __APPLE__
+	pthread_setname_np("fuse_worker");
+#else
 	pthread_setname_np(pthread_self(), "fuse_worker");
+#endif
 
 	while (!fuse_session_exited(mt->se)) {
 		int isforget = 0;

@@ -1,5 +1,7 @@
 /*  FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh / Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file COPYING.LIB.
@@ -27,8 +29,62 @@
 #include <sys/types.h>
 #include <assert.h>
 
+#ifdef __APPLE__
+#include <stdio.h>
+#include <sys/time.h>
+#endif
+
 #define FUSE_MAKE_VERSION(maj, min)  ((maj) * 100 + (min))
 #define FUSE_VERSION FUSE_MAKE_VERSION(FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION)
+
+#ifdef __APPLE__
+
+#ifndef FUSE_DARWIN_ENABLE_EXTENSIONS
+#define FUSE_DARWIN_ENABLE_EXTENSIONS 1
+#endif
+#ifndef FUSE_DARWIN_OVERLOAD_OPERATIONS
+#define FUSE_DARWIN_OVERLOAD_OPERATIONS 0
+#endif
+
+#ifndef RENAME_SWAP
+#define RENAME_SWAP 0x00000002
+#endif
+#ifndef RENAME_EXCL
+#define RENAME_EXCL 0x00000004
+#endif
+
+#define RENAME_EXCHANGE RENAME_SWAP
+#define RENAME_NOREPLACE RENAME_EXCL
+
+#define DARWIN_SYMBOL(name) __asm("_" #name "$DARWIN")
+
+#endif
+
+#if defined(__APPLE__) && FUSE_DARWIN_ENABLE_EXTENSIONS
+#define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
+	typeof(darwin) name DARWIN_SYMBOL(name);
+#elif defined(__APPLE__)
+#define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
+	typeof(vanilla) name; \
+	typeof(darwin) name ## $DARWIN;
+#else
+#define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
+	typeof(vanilla) name;
+#endif
+
+#if defined(__APPLE__) && FUSE_DARWIN_ENABLE_EXTENSIONS
+#define FUSE_DARWIN_EXTEND_OPERATION(name, vanilla, darwin) \
+	typeof(darwin) name;
+#elif defined(__APPLE__) && FUSE_DARWIN_OVERLOAD_OPERATIONS
+#define FUSE_DARWIN_EXTEND_OPERATION(name, _vanilla, _darwin) \
+	union { \
+		typeof(_vanilla) vanilla; \
+		typeof(_darwin) darwin; \
+	} name;
+#else
+#define FUSE_DARWIN_EXTEND_OPERATION(name, vanilla, darwin) \
+	typeof(vanilla) name;
+#endif
 
 #if (defined(__cplusplus) && __cplusplus >= 201103L) ||        \
 	(!defined(__cplusplus) && defined(__STDC_VERSION__) && \
@@ -524,6 +580,29 @@ enum fuse_capability {
 	FUSE_CAP_CURRENT_MAX
 };
 
+#ifdef __APPLE__
+
+enum fuse_darwin_capability {
+	FUSE_DARWIN_CAP_THREAD_SAFE = (1 << 0),
+
+	FUSE_DARWIN_CAP_CASE_INSENSITIVE = (1 << 1),
+
+	FUSE_DARWIN_CAP_ACCESS_EXT = (1 << 2),
+
+	FUSE_DARWIN_CAP_RENAME_EXT = (1 << 3),
+
+	FUSE_DARWIN_CAP_FALLOCATE = (1 << 4),
+
+	FUSE_DARWIN_CAP_SETVOLNAME = (1 << 5),
+
+	/**
+	 * Current maximum capability value.
+	 */
+	FUSE_DARWIN_CAP_CURRENT_MAX
+};
+
+#endif
+
 /**
  * Ioctl flags
  *
@@ -712,13 +791,33 @@ struct fuse_conn_info {
 	 */
 	uint64_t want_ext;
 
+#ifdef __APPLE__
+	/**
+	 * Darwin capability flags that the kernel supports (read-only)
+	 */
+	uint64_t capable_darwin;
+
+	/**
+	 * Darwin capability flags that the filesystem wants to enable.
+	 *
+	 * Don't set this field directly, but use the helper functions
+	 * fuse_darwin_set_feature_flag() / fuse_darwin_unset_feature_flag()
+	 */
+	uint64_t want_darwin;
+#endif
+
 	/**
 	 * For future use.
 	 */
 	uint32_t reserved[16];
 };
+#ifdef __APPLE__
+fuse_static_assert(sizeof(struct fuse_conn_info) == 144,
+		   "Size of struct fuse_conn_info must be 144 bytes");
+#else
 fuse_static_assert(sizeof(struct fuse_conn_info) == 128,
 		   "Size of struct fuse_conn_info must be 128 bytes");
+#endif
 
 struct fuse_session;
 struct fuse_pollhandle;
@@ -806,6 +905,33 @@ const char *fuse_pkgversion(void);
  * @param ph the poll handle
  */
 void fuse_pollhandle_destroy(struct fuse_pollhandle *ph);
+
+/* ----------------------------------------------------------- *
+ * Darwin file attributes				       *
+ * ----------------------------------------------------------- */
+
+#ifdef __APPLE__
+
+struct fuse_darwin_attr {
+	ino64_t ino;
+	mode_t mode;
+	nlink_t nlink;
+	uid_t uid;
+	gid_t gid;
+	dev_t rdev;
+	struct timespec atimespec;
+	struct timespec mtimespec;
+	struct timespec ctimespec;
+	struct timespec crtimespec;
+	struct timespec bkuptimespec;
+	off_t size;
+	blkcnt_t blocks;
+	blksize_t blksize;
+	unsigned int flags;
+	uint64_t reserved[8];
+};
+
+#endif
 
 /* ----------------------------------------------------------- *
  * Data buffer						       *
@@ -970,7 +1096,12 @@ struct libfuse_version
 	uint32_t major;
 	uint32_t minor;
 	uint32_t hotfix;
+#ifdef __APPLE__
+	uint32_t darwin_extensions_enabled : 1;
+	uint32_t padding : 31;
+#else
 	uint32_t padding;
+#endif
 };
 
 /* Initialize bufvec with a single buffer of given size */
@@ -1127,6 +1258,32 @@ static inline bool fuse_get_feature_flag(struct fuse_conn_info *conn,
 {
 	return conn->capable_ext & flag ? true : false;
 }
+
+#ifdef __APPLE__
+
+static inline bool fuse_darwin_set_feature_flag(struct fuse_conn_info *conn,
+						uint64_t flag)
+{
+	if (conn->capable_darwin & flag) {
+		conn->want_darwin |= flag;
+		return true;
+	}
+	return false;
+}
+
+static inline void fuse_darwin_unset_feature_flag(struct fuse_conn_info *conn,
+						  uint64_t flag)
+{
+	conn->want_darwin &= ~flag;
+}
+
+static inline bool fuse_darwin_get_feature_flag(struct fuse_conn_info *conn,
+						uint64_t flag)
+{
+	return conn->capable_darwin & flag ? true : false;
+}
+
+#endif
 
 /* ----------------------------------------------------------- *
  * Compatibility stuff					       *

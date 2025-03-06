@@ -1,6 +1,8 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (c) 2006-2008  Amit Singh / Google Inc.
+  Copyright (c) 2011-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file COPYING.LIB.
@@ -24,6 +26,11 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/uio.h>
+
+#ifdef __APPLE__
+#include <sys/param.h>
+#include <sys/mount.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,6 +94,31 @@ enum fuse_fill_dir_flags {
 typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 				const struct stat *stbuf, off_t off,
 				enum fuse_fill_dir_flags flags);
+
+#ifdef __APPLE__
+
+/** Function to add an entry in a readdir() operation
+ *
+ * The *off* parameter can be any non-zero value that enables the
+ * filesystem to identify the current point in the directory
+ * stream. It does not need to be the actual physical position. A
+ * value of zero is reserved to indicate that seeking in directories
+ * is not supported.
+ *
+ * @param buf the buffer passed to the readdir() operation
+ * @param name the file name of the directory entry
+ * @param attr file attributes, can be NULL
+ * @param off offset of the next entry or zero
+ * @param flags fill flags
+ * @return 1 if buffer is full, zero otherwise
+ */
+typedef int (*fuse_darwin_fill_dir_t) (void *buf, const char *name,
+				       const struct fuse_darwin_attr *attr,
+				       off_t off,
+				       enum fuse_fill_dir_flags flags);
+
+#endif
+
 /**
  * Configuration of the high-level API
  *
@@ -358,7 +390,36 @@ struct fuse_operations {
 	 * `fi` will always be NULL if the file is not currently open, but
 	 * may also be NULL if the file is open.
 	 */
-	int (*getattr) (const char *, struct stat *, struct fuse_file_info *fi);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		getattr,
+		int (*) (const char *, struct stat *,
+			 struct fuse_file_info *fi),
+		int (*) (const char *, struct fuse_darwin_attr *,
+			 struct fuse_file_info *fi)
+	)
+
+#ifdef __APPLE__
+	/**
+	 * Set file attributes
+	 *
+	 * In the 'attr' argument only members indicated by the 'to_set'
+	 * bitmask contain valid values.  Other members contain undefined
+	 * values.
+	 *
+	 * Unless FUSE_CAP_HANDLE_KILLPRIV is disabled, this method is
+	 * expected to reset the setuid and setgid bits if the file
+	 * size or owner is being changed.
+	 *
+	 * This method will not be called to update st_atime or st_ctime
+	 * implicitly (eg. after a read() request), and only be called to
+	 * implicitly update st_mtime if writeback caching is active. It is the
+	 * filesystem's responsibility to update these timestamps when needed,
+	 * and (if desired) to implement mount options like `noatime` or
+	 * `relatime`.
+	 */
+	int (*setattr) (const char *, struct fuse_darwin_attr *attr, int to_set,
+			struct fuse_file_info *fi);
+#endif
 
 	/** Read the target of a symbolic link
 	 *
@@ -513,7 +574,11 @@ struct fuse_operations {
 	 *
 	 * The 'f_favail', 'f_fsid' and 'f_flag' fields are ignored
 	 */
-	int (*statfs) (const char *, struct statvfs *);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		statfs,
+		int (*) (const char *, struct statvfs *),
+		int (*) (const char *, struct statfs *)
+	)
 
 	/** Possibly flush cached data
 	 *
@@ -567,10 +632,19 @@ struct fuse_operations {
 	int (*fsync) (const char *, int, struct fuse_file_info *);
 
 	/** Set extended attributes */
-	int (*setxattr) (const char *, const char *, const char *, size_t, int);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		setxattr,
+		int (*) (const char *, const char *, const char *, size_t, int),
+		int (*) (const char *, const char *, const char *, size_t, int,
+			 uint32_t)
+	)
 
 	/** Get extended attributes */
-	int (*getxattr) (const char *, const char *, char *, size_t);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		getxattr,
+		int (*) (const char *, const char *, char *, size_t),
+		int (*) (const char *, const char *, char *, size_t, uint32_t)
+	)
 
 	/** List extended attributes */
 	int (*listxattr) (const char *, char *, size_t);
@@ -610,8 +684,13 @@ struct fuse_operations {
 	 * used. The other fields are ignored when FUSE_READDIR_PLUS is not
 	 * set.
 	 */
-	int (*readdir) (const char *, void *, fuse_fill_dir_t, off_t,
-			struct fuse_file_info *, enum fuse_readdir_flags);
+FUSE_DARWIN_EXTEND_OPERATION(
+	readdir,
+	int (*) (const char *, void *, fuse_fill_dir_t, off_t,
+		 struct fuse_file_info *, enum fuse_readdir_flags),
+	int (*) (const char *, void *, fuse_darwin_fill_dir_t, off_t,
+		 struct fuse_file_info *, enum fuse_readdir_flags)
+)
 
 	/** Release directory
 	 *
@@ -850,6 +929,24 @@ struct fuse_operations {
 	 * Find next data or hole after the specified offset
 	 */
 	off_t (*lseek) (const char *, off_t off, int whence, struct fuse_file_info *);
+
+#ifdef __APPLE__
+	/**
+	 * Set file flags
+	 */
+	int (*chflags) (const char *, struct fuse_file_info *,
+			unsigned int flags);
+
+	/**
+	 * Rename the mounted volume
+	 *
+	 * If this request is answered with an error code of ENOSYS, this is
+	 * treated as a permanent failure, i.e. all future setvolname() requests
+	 * will fail with the same error code without being send to the
+	 * filesystem process.
+	 */
+	int (*setvolname) (const char *name);
+#endif
 };
 
 /** Extra context that may be needed by some filesystems
@@ -889,10 +986,15 @@ static inline int fuse_main_real(int argc, char *argv[],
 				 const struct fuse_operations *op,
 				 size_t op_size, void *user_data)
 {
-	struct libfuse_version version = { .major = FUSE_MAJOR_VERSION,
-					   .minor = FUSE_MINOR_VERSION,
-					   .hotfix = FUSE_HOTFIX_VERSION,
-					   .padding = 0 };
+	struct libfuse_version version = {
+		.major = FUSE_MAJOR_VERSION,
+		.minor = FUSE_MINOR_VERSION,
+		.hotfix = FUSE_HOTFIX_VERSION,
+#ifdef __APPLE__
+		.darwin_extensions_enabled = FUSE_DARWIN_ENABLE_EXTENSIONS,
+#endif
+		.padding = 0
+	};
 
 	fuse_log(FUSE_LOG_ERR,
 		 "%s is a libfuse internal function, please use fuse_main()\n",
@@ -964,9 +1066,12 @@ static inline int fuse_main_fn(int argc, char *argv[],
 			       void *user_data)
 {
 	struct libfuse_version version = {
-		.major  = FUSE_MAJOR_VERSION,
-		.minor  = FUSE_MINOR_VERSION,
+		.major = FUSE_MAJOR_VERSION,
+		.minor = FUSE_MINOR_VERSION,
 		.hotfix = FUSE_HOTFIX_VERSION,
+#ifdef __APPLE__
+		.darwin_extensions_enabled = FUSE_DARWIN_ENABLE_EXTENSIONS,
+#endif
 		.padding = 0
 	};
 
@@ -1037,6 +1142,9 @@ static inline struct fuse *fuse_new_fn(struct fuse_args *args,
 		.major = FUSE_MAJOR_VERSION,
 		.minor = FUSE_MINOR_VERSION,
 		.hotfix = FUSE_HOTFIX_VERSION,
+#ifdef __APPLE__
+		.darwin_extensions_enabled = FUSE_DARWIN_ENABLE_EXTENSIONS,
+#endif
 		.padding = 0
 	};
 
@@ -1051,6 +1159,9 @@ static inline struct fuse *fuse_new_fn(struct fuse_args *args,
 		.major = FUSE_MAJOR_VERSION,
 		.minor = FUSE_MINOR_VERSION,
 		.hotfix = FUSE_HOTFIX_VERSION,
+#ifdef __APPLE__
+		.darwin_extensions_enabled = FUSE_DARWIN_ENABLE_EXTENSIONS,
+#endif
 		.padding = 0
 	};
 
@@ -1250,6 +1361,17 @@ int fuse_clean_cache(struct fuse *fuse);
  */
 struct fuse_fs;
 
+#ifdef __APPLE__
+
+/**
+ * Returns true, if the Darwin extensions are enabled, false otherwise.
+ *
+ * @return true, if the Darwin extensions are enabled, false otherwise
+ */
+bool fuse_fs_darwin_extensions_enabled(struct fuse_fs *fs);
+
+#endif
+
 /*
  * These functions call the relevant filesystem operation, and return
  * the result.
@@ -1259,8 +1381,18 @@ struct fuse_fs;
  * fuse_fs_releasedir and fuse_fs_statfs, which return 0.
  */
 
-int fuse_fs_getattr(struct fuse_fs *fs, const char *path, struct stat *buf,
-		    struct fuse_file_info *fi);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_fs_getattr,
+	int (struct fuse_fs *fs, const char *path, struct stat *buf,
+	     struct fuse_file_info *fi),
+	int (struct fuse_fs *fs, const char *path, struct fuse_darwin_attr *buf,
+	     struct fuse_file_info *fi)
+)
+#ifdef __APPLE__
+int fuse_fs_setattr(struct fuse_fs *fs, const char *path,
+		    struct fuse_darwin_attr *attr, int to_set,
+		    struct fuse_file_info *fi) DARWIN_SYMBOL(fuse_fs_setattr);
+#endif
 int fuse_fs_rename(struct fuse_fs *fs, const char *oldpath,
 		   const char *newpath, unsigned int flags);
 int fuse_fs_unlink(struct fuse_fs *fs, const char *path);
@@ -1286,12 +1418,22 @@ int fuse_fs_fsync(struct fuse_fs *fs, const char *path, int datasync,
 		  struct fuse_file_info *fi);
 int fuse_fs_flush(struct fuse_fs *fs, const char *path,
 		  struct fuse_file_info *fi);
-int fuse_fs_statfs(struct fuse_fs *fs, const char *path, struct statvfs *buf);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_fs_statfs,
+	int (struct fuse_fs *fs, const char *path, struct statvfs *buf),
+	int (struct fuse_fs *fs, const char *path, struct statfs *buf)
+)
 int fuse_fs_opendir(struct fuse_fs *fs, const char *path,
 		    struct fuse_file_info *fi);
-int fuse_fs_readdir(struct fuse_fs *fs, const char *path, void *buf,
-		    fuse_fill_dir_t filler, off_t off,
-		    struct fuse_file_info *fi, enum fuse_readdir_flags flags);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_fs_readdir,
+	int (struct fuse_fs *fs, const char *path, void *buf,
+	     fuse_fill_dir_t filler, off_t off, struct fuse_file_info *fi,
+	     enum fuse_readdir_flags flags),
+	int (struct fuse_fs *fs, const char *path, void *buf,
+	     fuse_darwin_fill_dir_t filler, off_t off,
+	     struct fuse_file_info *fi, enum fuse_readdir_flags flags)
+)
 int fuse_fs_fsyncdir(struct fuse_fs *fs, const char *path, int datasync,
 		     struct fuse_file_info *fi);
 int fuse_fs_releasedir(struct fuse_fs *fs, const char *path,
@@ -1316,10 +1458,20 @@ int fuse_fs_readlink(struct fuse_fs *fs, const char *path, char *buf,
 int fuse_fs_mknod(struct fuse_fs *fs, const char *path, mode_t mode,
 		  dev_t rdev);
 int fuse_fs_mkdir(struct fuse_fs *fs, const char *path, mode_t mode);
-int fuse_fs_setxattr(struct fuse_fs *fs, const char *path, const char *name,
-		     const char *value, size_t size, int flags);
-int fuse_fs_getxattr(struct fuse_fs *fs, const char *path, const char *name,
-		     char *value, size_t size);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_fs_setxattr,
+	int (struct fuse_fs *fs, const char *path, const char *name,
+	     const char *value, size_t size, int flags),
+	int (struct fuse_fs *fs, const char *path, const char *name,
+	     const char *value, size_t size, int flags, unsigned int position)
+)
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_fs_getxattr,
+	int (struct fuse_fs *fs, const char *path, const char *name,
+	     char *value, size_t size),
+	int (struct fuse_fs *fs, const char *path, const char *name,
+	     char *value, size_t size, unsigned int position)
+)
 int fuse_fs_listxattr(struct fuse_fs *fs, const char *path, char *list,
 		      size_t size);
 int fuse_fs_removexattr(struct fuse_fs *fs, const char *path,
@@ -1347,6 +1499,13 @@ ssize_t fuse_fs_copy_file_range(struct fuse_fs *fs, const char *path_in,
 				size_t len, int flags);
 off_t fuse_fs_lseek(struct fuse_fs *fs, const char *path, off_t off, int whence,
 		    struct fuse_file_info *fi);
+#ifdef __APPLE__
+int fuse_fs_chflags(struct fuse_fs *fs, const char *path,
+		    struct fuse_file_info *fi, unsigned int flags)
+	DARWIN_SYMBOL(fuse_fs_chflags);
+int fuse_fs_setvolname(struct fuse_fs *fs, const char *name)
+	DARWIN_SYMBOL(fuse_fs_setvolname);
+#endif
 void fuse_fs_init(struct fuse_fs *fs, struct fuse_conn_info *conn,
 		struct fuse_config *cfg);
 void fuse_fs_destroy(struct fuse_fs *fs);

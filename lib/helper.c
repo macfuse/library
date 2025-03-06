@@ -1,6 +1,8 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh / Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   Helper functions to create (simple) standalone programs. With the
   aid of these functions it should be possible to create full FUSE
@@ -157,10 +159,20 @@ static int fuse_helper_opt_proc(void *data, const char *arg, int key,
 
 			char mountpoint[PATH_MAX] = "";
 			if (realpath(arg, mountpoint) == NULL) {
+#ifdef __APPLE__
+				/*
+				 * The mountpoint does not exist and we will
+				 * create it down the line, if possible. This is
+				 * required to allow non-admin users to mount
+				 * volumes under /Volumes.
+				 */
+				return fuse_opt_add_opt(&opts->mountpoint, arg);
+#else
 				fuse_log(FUSE_LOG_ERR,
 					"fuse: bad mount point `%s': %s\n",
 					arg, strerror(errno));
 				return -1;
+#endif
 			}
 			return fuse_opt_add_opt(&opts->mountpoint, mountpoint);
 		} else {
@@ -484,7 +496,11 @@ int fuse_open_channel(const char *mountpoint, const char* options)
 	if (opts == NULL)
 		return -1;
 
+#ifdef __APPLE__
+	fd = fuse_kern_mount(mountpoint, opts, NULL, NULL);
+#else
 	fd = fuse_kern_mount(mountpoint, opts);
+#endif
 	destroy_mount_opts(opts);
 
 	return fd;

@@ -24,11 +24,7 @@ FUSE_HOTFIX_VERSION = version_list[2]
 FUSE_RC_VERSION = version_parts.length() > 1 ? version_parts[1] : ''
 
 platform = host_machine.system()
-if platform == 'darwin'
-  error('libfuse does not support OS-X.\n' +
-        'Take a look at http://osxfuse.github.io/ or the more recent\n' +
-        'https://www.fuse-t.org/ instead')
-elif platform == 'cygwin' or platform == 'windows'
+if platform == 'cygwin' or platform == 'windows'
   error('libfuse does not support Windows.\n' +
         'Take a look at http://www.secfs.net/winfsp/ instead')       
 endif
@@ -80,7 +76,9 @@ endforeach
 private_cfg.set('HAVE_SETXATTR', 
         cc.has_function('setxattr', prefix: '#include <sys/xattr.h>'))
 private_cfg.set('HAVE_ICONV', 
-        cc.has_function('iconv', prefix: '#include <iconv.h>'))
+        cc.has_function('iconv',
+                        prefix: '#include <iconv.h>',
+                        args: [ '-liconv' ]))
 private_cfg.set('HAVE_BACKTRACE',
         cc.has_function('backtrace', prefix: '#include <execinfo.h>'))
 
@@ -228,15 +226,15 @@ thread_dep = dependency('threads')
 # Read build files from sub-directories
 #
 subdirs = [ 'lib', 'include']
-if get_option('utils') and not platform.endswith('bsd') and platform != 'dragonfly'
+if get_option('utils') and not platform.endswith('bsd') and platform != 'dragonfly' and platform != 'darwin'
   subdirs += [ 'util', 'doc' ]
 endif
 
-if get_option('examples')
+if get_option('examples') and platform != 'darwin'
   subdirs += 'example'
 endif
 
-if get_option('tests')
+if get_option('tests') and platform != 'darwin'
   subdirs += 'test'
 endif
 

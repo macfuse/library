@@ -1,12 +1,18 @@
 /*
   fuse subdir module: offset paths with a base directory
   Copyright (C) 2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh / Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file COPYING.LIB
 */
 
 #include <fuse_config.h>
+
+#ifdef __APPLE__
+#define FUSE_DARWIN_OVERLOAD_OPERATIONS 1
+#endif
 
 #include <fuse.h>
 #include <stdio.h>
@@ -62,6 +68,36 @@ static int subdir_getattr(const char *path, struct stat *stbuf,
 	}
 	return err;
 }
+
+#ifdef __APPLE__
+
+static int subdir_getattr$DARWIN(const char *path, struct fuse_darwin_attr *attr,
+				 struct fuse_file_info *fi)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_getattr$DARWIN(d->next, newpath, attr, fi);
+		free(newpath);
+	}
+	return err;
+}
+
+static int subdir_setattr(const char *path, struct fuse_darwin_attr *attr,
+			  int to_set, struct fuse_file_info *fi)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_setattr(d->next, newpath, attr, to_set, fi);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
 
 static int subdir_access(const char *path, int mask)
 {
@@ -180,6 +216,26 @@ static int subdir_readdir(const char *path, void *buf,
 	}
 	return err;
 }
+
+#ifdef __APPLE__
+
+static int subdir_readdir$DARWIN(const char *path, void *buf,
+				 fuse_darwin_fill_dir_t filler, off_t offset,
+				 struct fuse_file_info *fi,
+				 enum fuse_readdir_flags flags)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_readdir$DARWIN(d->next, newpath, buf, filler,
+					     offset, fi, flags);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
 
 static int subdir_releasedir(const char *path, struct fuse_file_info *fi)
 {
@@ -402,6 +458,22 @@ static int subdir_statfs(const char *path, struct statvfs *stbuf)
 	return err;
 }
 
+#ifdef __APPLE__
+
+static int subdir_statfs$DARWIN(const char *path, struct statfs *stbuf)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_statfs$DARWIN(d->next, newpath, stbuf);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
+
 static int subdir_flush(const char *path, struct fuse_file_info *fi)
 {
 	struct subdir *d = subdir_get();
@@ -466,6 +538,25 @@ static int subdir_setxattr(const char *path, const char *name,
 	return err;
 }
 
+#ifdef __APPLE__
+
+static int subdir_setxattr$DARWIN(const char *path, const char *name,
+				  const char *value, size_t size, int flags,
+				  unsigned int position)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_setxattr$DARWIN(d->next, newpath, name, value,
+					      size, flags, position);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
+
 static int subdir_getxattr(const char *path, const char *name, char *value,
 			   size_t size)
 {
@@ -478,6 +569,25 @@ static int subdir_getxattr(const char *path, const char *name, char *value,
 	}
 	return err;
 }
+
+#ifdef __APPLE__
+
+static int subdir_getxattr$DARWIN(const char *path, const char *name,
+				  char *value, size_t size,
+				  unsigned int position)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_getxattr$DARWIN(d->next, newpath, name, value,
+					      size, position);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
 
 static int subdir_listxattr(const char *path, char *list, size_t size)
 {
@@ -553,6 +663,28 @@ static off_t subdir_lseek(const char *path, off_t off, int whence,
 	return res;
 }
 
+#ifdef __APPLE__
+
+static int subdir_chflags(const char *path, struct fuse_file_info *fi,
+			 unsigned int flags)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_chflags(d->next, newpath, fi, flags);
+		free(newpath);
+	}
+	return err;
+}
+
+static int subdir_setvolname(const char *name)
+{
+	return fuse_fs_setvolname(subdir_get()->next, name);
+}
+
+#endif
+
 static void *subdir_init(struct fuse_conn_info *conn,
 			 struct fuse_config *cfg)
 {
@@ -574,11 +706,18 @@ static void subdir_destroy(void *data)
 static const struct fuse_operations subdir_oper = {
 	.destroy	= subdir_destroy,
 	.init		= subdir_init,
+#ifndef __APPLE__
 	.getattr	= subdir_getattr,
+#endif
+#ifdef __APPLE__
+	.setattr	= subdir_setattr,
+#endif
 	.access		= subdir_access,
 	.readlink	= subdir_readlink,
 	.opendir	= subdir_opendir,
+#ifndef __APPLE__
 	.readdir	= subdir_readdir,
+#endif
 	.releasedir	= subdir_releasedir,
 	.mknod		= subdir_mknod,
 	.mkdir		= subdir_mkdir,
@@ -595,19 +734,27 @@ static const struct fuse_operations subdir_oper = {
 	.open		= subdir_open,
 	.read_buf	= subdir_read_buf,
 	.write_buf	= subdir_write_buf,
+#ifndef __APPLE__
 	.statfs		= subdir_statfs,
+#endif
 	.flush		= subdir_flush,
 	.release	= subdir_release,
 	.fsync		= subdir_fsync,
 	.fsyncdir	= subdir_fsyncdir,
+#ifndef __APPLE__
 	.setxattr	= subdir_setxattr,
 	.getxattr	= subdir_getxattr,
+#endif
 	.listxattr	= subdir_listxattr,
 	.removexattr	= subdir_removexattr,
 	.lock		= subdir_lock,
 	.flock		= subdir_flock,
 	.bmap		= subdir_bmap,
 	.lseek		= subdir_lseek,
+#ifdef __APPLE__
+	.chflags	= subdir_chflags,
+	.setvolname	= subdir_setvolname,
+#endif
 };
 
 static const struct fuse_opt subdir_opts[] = {
@@ -675,7 +822,27 @@ static struct fuse_fs *subdir_new(struct fuse_args *args,
 	}
 	d->baselen = strlen(d->base);
 	d->next = next[0];
+#ifdef __APPLE__
+	{
+		struct fuse_operations oper = subdir_oper;
+		if (fuse_fs_darwin_extensions_enabled(next[0])) {
+			oper.getattr.darwin = subdir_getattr$DARWIN;
+			oper.readdir.darwin = subdir_readdir$DARWIN;
+			oper.statfs.darwin = subdir_statfs$DARWIN;
+			oper.setxattr.darwin = subdir_setxattr$DARWIN;
+			oper.getxattr.darwin = subdir_getxattr$DARWIN;
+		} else {
+			oper.getattr.vanilla = subdir_getattr;
+			oper.readdir.vanilla = subdir_readdir;
+			oper.statfs.vanilla = subdir_statfs;
+			oper.setxattr.vanilla = subdir_setxattr;
+			oper.getxattr.vanilla = subdir_getxattr;
+		}
+		fs = fuse_fs_new(&oper, sizeof(oper), d);
+	}
+#else
 	fs = fuse_fs_new(&subdir_oper, sizeof(subdir_oper), d);
+#endif
 	if (!fs)
 		goto out_free;
 	return fs;

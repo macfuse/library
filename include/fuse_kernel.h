@@ -267,14 +267,28 @@ struct fuse_attr {
 	uint64_t	atime;
 	uint64_t	mtime;
 	uint64_t	ctime;
+#ifdef __APPLE__
+	uint64_t	crtime;
+#endif
 	uint32_t	atimensec;
 	uint32_t	mtimensec;
 	uint32_t	ctimensec;
+#ifdef __APPLE__
+	uint32_t	crtimensec;
+#endif
 	uint32_t	mode;
 	uint32_t	nlink;
 	uint32_t	uid;
 	uint32_t	gid;
 	uint32_t	rdev;
+#ifdef __APPLE__
+	/*
+	 * TODO(bf) Is there a better way of dealing with two flags fileds? The
+	 * flags_darwin field (originally named flags) was introduced before the
+	 * official flags field below.
+	 */
+	uint32_t	flags_darwin;
+#endif
 	uint32_t	blksize;
 	uint32_t	flags;
 };
@@ -348,6 +362,12 @@ struct fuse_file_lock {
 #define FATTR_LOCKOWNER	(1 << 9)
 #define FATTR_CTIME	(1 << 10)
 #define FATTR_KILL_SUIDGID	(1 << 11)
+#ifdef __APPLE__
+#define FATTR_CRTIME	(1 << 28)
+#define FATTR_CHGTIME	(1 << 29)
+#define FATTR_BKUPTIME	(1 << 30)
+#define FATTR_FLAGS	(1 << 31)
+#endif
 
 /**
  * Flags returned by the OPEN request
@@ -369,6 +389,10 @@ struct fuse_file_lock {
 #define FOPEN_NOFLUSH		(1 << 5)
 #define FOPEN_PARALLEL_DIRECT_WRITES	(1 << 6)
 #define FOPEN_PASSTHROUGH	(1 << 7)
+#ifdef __APPLE__
+#define FOPEN_PURGE_ATTR	(1 << 30)
+#define FOPEN_PURGE_UBC		(1 << 31)
+#endif
 
 /**
  * INIT request/reply flags
@@ -463,6 +487,20 @@ struct fuse_file_lock {
 #define FUSE_PASSTHROUGH	(1ULL << 37)
 #define FUSE_NO_EXPORT_SUPPORT	(1ULL << 38)
 #define FUSE_HAS_RESEND		(1ULL << 39)
+
+#ifdef __APPLE__
+/*
+ * TODO(bf) Resolve conflict with vanilla API. As long as we don't support
+ * anything beyond 7.19 on the kernel-side this should not be an issue. We need
+ * to clean this up when moving to 7.20 or later.
+ */
+#define FUSE_DARWIN_ACCESS_EXT		(1 << 23)
+#define FUSE_DARWIN_THREAD_SAFE		(1 << 24)
+#define FUSE_DARWIN_RENAME_EXT		((1 << 25) | (1 << 26))
+#define FUSE_DARWIN_FALLOCATE		(1 << 27)
+#define FUSE_DARWIN_CASE_INSENSITIVE	(1 << 29)
+#define FUSE_DARWIN_SETVOLNAME		(1 << 30)
+#endif
 
 /* Obsolete alias for FUSE_DIRECT_IO_ALLOW_MMAP */
 #define FUSE_DIRECT_IO_RELAX	FUSE_DIRECT_IO_ALLOW_MMAP
@@ -633,6 +671,11 @@ enum fuse_opcode {
 	FUSE_SYNCFS		= 50,
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
+#ifdef __APPLE__
+	FUSE_SETVOLNAME    = 61,
+	FUSE_GETXTIMES     = 62,
+	FUSE_EXCHANGE      = 63,
+#endif
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -656,7 +699,11 @@ enum fuse_notify_code {
 /* The read buffer is required to be at least 8k, but may be much larger */
 #define FUSE_MIN_READ_BUFFER 8192
 
+#ifdef __APPLE__
+#define FUSE_COMPAT_ENTRY_OUT_SIZE 136
+#else
 #define FUSE_COMPAT_ENTRY_OUT_SIZE 120
+#endif
 
 struct fuse_entry_out {
 	uint64_t	nodeid;		/* Inode ID */
@@ -689,7 +736,11 @@ struct fuse_getattr_in {
 	uint64_t	fh;
 };
 
+#ifdef __APPLE__
+#define FUSE_COMPAT_ATTR_OUT_SIZE 112
+#else
 #define FUSE_COMPAT_ATTR_OUT_SIZE 96
+#endif
 
 struct fuse_attr_out {
 	uint64_t	attr_valid;	/* Cache timeout for the attributes */
@@ -697,6 +748,17 @@ struct fuse_attr_out {
 	uint32_t	dummy;
 	struct fuse_attr attr;
 };
+
+#ifdef __APPLE__
+
+struct fuse_getxtimes_out {
+	uint64_t	bkuptime;
+	uint64_t	crtime;
+	uint32_t	bkuptimensec;
+	uint32_t	crtimensec;
+};
+
+#endif
 
 struct fuse_statx_in {
 	uint32_t	getattr_flags;
@@ -759,6 +821,15 @@ struct fuse_setattr_in {
 	uint32_t	uid;
 	uint32_t	gid;
 	uint32_t	unused5;
+#ifdef __APPLE__
+	uint64_t	bkuptime;
+	uint64_t	chgtime;
+	uint64_t	crtime;
+	uint32_t	bkuptimensec;
+	uint32_t	chgtimensec;
+	uint32_t	crtimensec;
+	uint32_t	flags; /* file flags; see chflags(2) */
+#endif
 };
 
 struct fuse_open_in {
@@ -837,13 +908,22 @@ struct fuse_fsync_in {
 struct fuse_setxattr_in {
 	uint32_t	size;
 	uint32_t	flags;
+#ifdef __APPLE__
+	uint32_t	position;
+#endif
 	uint32_t	setxattr_flags;
+#ifndef __APPLE__
 	uint32_t	padding;
+#endif
 };
 
 struct fuse_getxattr_in {
 	uint32_t	size;
 	uint32_t	padding;
+#ifdef __APPLE__
+	uint32_t	position;
+	uint32_t	padding2;
+#endif
 };
 
 struct fuse_getxattr_out {
