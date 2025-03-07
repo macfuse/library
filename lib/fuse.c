@@ -49,7 +49,7 @@
 #include <sys/file.h>
 
 #ifdef __APPLE__
-#  include <CoreFoundation/CoreFoundation.h>
+#  include <iconv.h>
 #endif
 
 #define FUSE_NODE_SLAB 1
@@ -156,6 +156,9 @@ struct fuse {
 	struct fuse_session *se;
 	struct node_table name_table;
 	struct node_table id_table;
+#ifdef __APPLE__
+        iconv_t name_converter;
+#endif
 	struct list_head lru_table;
 	fuse_ino_t ctr;
 	unsigned int generation;
@@ -781,29 +784,34 @@ static void rehash_name(struct fuse *f)
 		node_table_resize(t);
 }
 
+#ifdef __APPLE__
+
+static inline int normalize_name(struct fuse *f, const char *in, char *out,
+                                 size_t out_size)
+{
+	size_t in_left = strlen(in);
+	char *dst = out;
+	size_t dst_left = out_size - 1;
+
+	if (iconv(f->name_converter, (char **)&in, &in_left, &dst,
+		  &dst_left) != 0)
+		return -1;
+
+	*dst = '\0';
+	return 0;
+}
+
+#endif /* __APPLE__ */
+
 static int hash_name(struct fuse *f, struct node *node, fuse_ino_t parentid,
 		     const char *name)
 {
 #ifdef __APPLE__
-	if (f->conf.norm_insensitive) {
-		CFStringRef name_cfstr;
-		CFMutableStringRef name_cfmstr;
-		char name_nfc[MAXPATHLEN];
-
-		name_cfstr = CFStringCreateWithCString(kCFAllocatorDefault,
-						       name,
-						       kCFStringEncodingUTF8);
-		name_cfmstr = CFStringCreateMutableCopy(NULL, 0, name_cfstr);
-
-		CFStringNormalize(name_cfmstr, kCFStringNormalizationFormC);
-		CFStringGetCString(name_cfmstr, name_nfc, sizeof(name_nfc),
-				   kCFStringEncodingUTF8);
-
-		CFRelease(name_cfstr);
-		CFRelease(name_cfmstr);
-
-		name = name_nfc;
-	}
+	char name_normalized[MAXPATHLEN];
+	if (normalize_name(f, name, name_normalized,
+			   sizeof(name_normalized)) == -1)
+		return -1;
+	name = name_normalized;
 #endif /* __APPLE__ */
 
 	size_t hash = name_hash(f, parentid, name);
@@ -866,25 +874,11 @@ static struct node *lookup_node(struct fuse *f, fuse_ino_t parent,
 				const char *name)
 {
 #ifdef __APPLE__
-	if (f->conf.norm_insensitive) {
-		CFStringRef name_cfstr;
-		CFMutableStringRef name_cfmstr;
-		char name_nfc[MAXPATHLEN];
-
-		name_cfstr = CFStringCreateWithCString(kCFAllocatorDefault,
-						       name,
-						       kCFStringEncodingUTF8);
-		name_cfmstr = CFStringCreateMutableCopy(NULL, 0, name_cfstr);
-
-		CFStringNormalize(name_cfmstr, kCFStringNormalizationFormC);
-		CFStringGetCString(name_cfmstr, name_nfc, sizeof(name_nfc),
-				   kCFStringEncodingUTF8);
-
-		CFRelease(name_cfstr);
-		CFRelease(name_cfmstr);
-
-		name = name_nfc;
-	}
+	char name_normalized[MAXPATHLEN];
+	if (normalize_name(f, name, name_normalized,
+			   sizeof(name_normalized)) == -1)
+		return NULL;
+	name = name_normalized;
 #endif /* __APPLE__ */
 
 	size_t hash = name_hash(f, parent, name);
@@ -5591,12 +5585,24 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 	if (node_table_init(&f->id_table) == -1)
 		goto out_free_name_table;
 
+#ifdef __APPLE__
+	f->name_converter = iconv_open("UTF-8-MAC", "");
+	if (f->name_converter == (iconv_t)-1) {
+		fprintf(stderr, "fuse: failed to open name converter\n");
+		goto out_free_id_table;
+	}
+#endif
+
 	fuse_mutex_init(&f->lock);
 
 	root = alloc_node(f);
 	if (root == NULL) {
 		fprintf(stderr, "fuse: memory allocation failed\n");
+#ifdef __APPLE__
+		goto out_close_name_converter;
+#else
 		goto out_free_id_table;
+#endif
 	}
 	if (lru_enabled(f)) {
 		struct node_lru *lnode = node_lru(root);
@@ -5620,6 +5626,10 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 
 out_free_root:
 	free(root);
+#ifdef __APPLE__
+out_close_name_converter:
+	(void) iconv_close(f->name_converter);
+#endif
 out_free_id_table:
 	free(f->id_table.array);
 out_free_name_table:
@@ -5691,6 +5701,10 @@ void fuse_destroy(struct fuse *f)
 	}
 	assert(list_empty(&f->partial_slabs));
 	assert(list_empty(&f->full_slabs));
+
+#ifdef __APPLE__
+	(void) iconv_close(f->name_converter);
+#endif
 
 	free(f->id_table.array);
 	free(f->name_table.array);
