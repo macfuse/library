@@ -3520,10 +3520,6 @@ void fuse_buf_free(struct fuse_buf *buf)
  */
 static void *buf_alloc(size_t size, bool internal)
 {
-#ifdef __APPLE__
-	/* aligned_alloc() is not available on macOS 10.14 and older */
-	if (__builtin_available(macOS 10.15, *)) {
-#endif
 	/*
 	 * For libfuse internal caller add in alignment. That cannot be done
 	 * for an external caller, as it is not guaranteed that the external
@@ -3541,12 +3537,9 @@ static void *buf_alloc(size_t size, bool internal)
 		buf += pagesize - write_header_sz;
 
 		return buf;
+	} else {
+		return malloc(size);
 	}
-#ifdef __APPLE__
-	}
-#endif
-
-	return malloc(size);
 }
 
 /*
