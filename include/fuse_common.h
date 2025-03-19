@@ -575,24 +575,17 @@ struct fuse_loop_config_v1 {
 
 #ifdef __APPLE__
 
-enum fuse_darwin_capability {
-	FUSE_DARWIN_CAP_THREAD_SAFE = (1 << 0),
+#define FUSE_DARWIN_CAP_THREAD_SAFE (1 << 0)
 
-	FUSE_DARWIN_CAP_CASE_INSENSITIVE = (1 << 1),
+#define FUSE_DARWIN_CAP_CASE_INSENSITIVE (1 << 1)
 
-	FUSE_DARWIN_CAP_ACCESS_EXT = (1 << 2),
+#define FUSE_DARWIN_CAP_ACCESS_EXT (1 << 2)
 
-	FUSE_DARWIN_CAP_RENAME_EXT = (1 << 3),
+#define FUSE_DARWIN_CAP_RENAME_EXT (1 << 3)
 
-	FUSE_DARWIN_CAP_FALLOCATE = (1 << 4),
+#define FUSE_DARWIN_CAP_FALLOCATE (1 << 4)
 
-	FUSE_DARWIN_CAP_SETVOLNAME = (1 << 5),
-
-	/**
-	 * Current maximum capability value.
-	 */
-	FUSE_DARWIN_CAP_CURRENT_MAX
-};
+#define FUSE_DARWIN_CAP_SETVOLNAME (1 << 5)
 
 #endif
 
