@@ -12,14 +12,15 @@
 */
 
 #define _GNU_SOURCE
-#include "fuse.h"
-#include <pthread.h>
-
-#include "fuse_config.h"
 
 #ifdef __APPLE__
 #define FUSE_DARWIN_OVERLOAD_OPERATIONS 1
 #endif
+
+#include "fuse.h"
+#include <pthread.h>
+
+#include "fuse_config.h"
 
 #include "fuse_i.h"
 #include "fuse_lowlevel.h"
