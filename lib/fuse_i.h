@@ -109,6 +109,10 @@ int fuse_sync_compat_args(struct fuse_args *args);
 
 struct fuse_chan *fuse_kern_chan_new(int fd);
 
+#ifdef __APPLE__
+struct fuse_chan *fuse_socket_chan_new(int fd);
+#endif
+
 struct fuse_session *fuse_lowlevel_new_common(struct fuse_args *args,
 					const struct fuse_lowlevel_ops *op,
 					size_t op_size, void *userdata);

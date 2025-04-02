@@ -8,11 +8,12 @@ lib_LTLIBRARIES = libfuse.la
 
 if DARWIN
 AM_CPPFLAGS += -O -gdwarf-2
-target_source =            \
-    fuse_darwin.c        \
-    modules/threadid.c    \
-    modules/volicon.c    \
-    mount_darwin.c
+target_source =            	\
+	fuse_darwin.c		\
+	fuse_socket_chan.c	\
+	modules/threadid.c   	\
+	modules/volicon.c	\
+	mount_darwin.c
 else
 lib_LTLIBRARIES += libulockmgr.la
 if BSD
