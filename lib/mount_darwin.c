@@ -57,6 +57,7 @@ struct mount_opts {
 	int allow_root;
 	int ishelp;
 	char *kernel_opts;
+	char *backend;
 };
 
 static const struct fuse_opt fuse_mount_opts[] = {
@@ -172,6 +173,7 @@ static const struct fuse_opt fuse_mount_opts[] = {
 	FUSE_OPT_KEY("sparse",		      KEY_KERN),
 	FUSE_OPT_KEY("subtype=",	      KEY_IGNORED),
 	FUSE_OPT_KEY("volname=",	      KEY_KERN),
+	{ "backend=%s", offsetof(struct mount_opts, backend), 1 },
 	FUSE_OPT_END
 };
 
@@ -365,7 +367,7 @@ out:
 	return NULL;
 }
 
-static int fuse_mount_core(const char *mountpoint, const char *opts,
+static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 			   void (*callback)(void *, int), void *context)
 {
 	int fd;
@@ -387,7 +389,12 @@ static int fuse_mount_core(const char *mountpoint, const char *opts,
 		goto out;
 	}
 
-	mount_prog_path = fuse_resource_path(FUSE_MOUNT_PROG);
+	if (mo->backend && strcmp(mo->backend, "fskit") == 0)
+		mount_prog_path = FUSE_MOUNT_PROG_FSKIT;
+	else
+		mount_prog_path = FUSE_MOUNT_PROG;
+
+	mount_prog_path = fuse_resource_path(mount_prog_path);
 	if (!mount_prog_path) {
 		fprintf(stderr, "fuse: mount program missing\n");
 		return -1;
@@ -437,9 +444,9 @@ static int fuse_mount_core(const char *mountpoint, const char *opts,
 			setenv("_FUSE_COMMVERS", "2", 1);
 
 			argv[a++] = mount_prog_path;
-			if (opts) {
+			if (mo->kernel_opts) {
 				argv[a++] = "-o";
-				argv[a++] = opts;
+				argv[a++] = mo->kernel_opts;
 			}
 			if (quiet_mode) {
 				argv[a++] = "-q";
@@ -522,9 +529,10 @@ int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
 		goto out;
 	}
 
-	res = fuse_mount_core(mountpoint, mo.kernel_opts, callback, context);
+	res = fuse_mount_core(mountpoint, &mo, callback, context);
 
 out:
 	free(mo.kernel_opts);
+	free(mo.backend);
 	return res;
 }

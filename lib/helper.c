@@ -339,15 +339,30 @@ out:
 	fuse_mount_context_destroy(mc);
 }
 
+struct mount_opts {
+	char *backend;
+};
+
+static const struct fuse_opt fuse_mount_opts[] = {
+	{ "backend=%s", offsetof(struct mount_opts, backend), 1 },
+	FUSE_OPT_KEY("backend=", FUSE_OPT_KEY_KEEP),
+	FUSE_OPT_END
+};
+
 #endif /* __APPLE__ */
 
 static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 					   struct fuse_args *args)
 {
-	struct fuse_chan *ch;
+	struct fuse_chan *ch = NULL;
 	int fd;
 #ifdef __APPLE__
-	struct fuse_mount_context *mc = fuse_mount_context_new(mountpoint);
+	struct mount_opts mo;
+	struct fuse_mount_context *mc;
+
+	memset(&mo, 0, sizeof(mo));
+	if (fuse_opt_parse(args, &mo, fuse_mount_opts, NULL) == -1)
+		goto out;
 #endif /* __APPLE__ */
 
 	/*
@@ -361,6 +376,7 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 	} while (fd >= 0 && fd <= 2);
 
 #ifdef __APPLE__
+	mc = fuse_mount_context_new(mountpoint);
 	pthread_mutex_lock(&mc->lock);
 
 	fd = fuse_kern_mount(mountpoint, args, &fuse_mount_callback, mc);
@@ -369,10 +385,14 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 
 		/* fuse_mount_callback() is not going to be called */
 		fuse_mount_context_destroy(mc);
-		return NULL;
+		goto out;
 	}
 
-	ch = fuse_kern_chan_new(fd);
+	if (mo.backend && strcmp(mo.backend, "fskit") == 0)
+		ch = fuse_socket_chan_new(fd);
+	else
+		ch = fuse_kern_chan_new(fd);
+
 	if (ch) {
 		fuse_chan_retain(ch);
 		mc->ch = ch;
@@ -387,6 +407,9 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 	}
 
 	pthread_mutex_unlock(&mc->lock);
+
+out:
+	free(mo.backend);
 #else /* __APPLE__ */
 	fd = fuse_mount_compat25(mountpoint, args);
 	if (fd == -1)
