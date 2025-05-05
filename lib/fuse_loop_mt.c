@@ -159,10 +159,12 @@ static void *fuse_do_work(void *data)
 	struct fuse_worker *w = (struct fuse_worker *) data;
 	struct fuse_mt *mt = w->mt;
 
+#ifdef HAVE_PTHREAD_SETNAME_NP
 #ifdef __APPLE__
 	pthread_setname_np("fuse_worker");
 #else
 	pthread_setname_np(pthread_self(), "fuse_worker");
+#endif
 #endif
 
 	while (!fuse_session_exited(mt->se)) {

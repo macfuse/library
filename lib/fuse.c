@@ -6207,10 +6207,12 @@ static void *fuse_prune_nodes(void *fuse)
 	struct fuse *f = fuse;
 	int sleep_time;
 
+#ifdef HAVE_PTHREAD_SETNAME_NP
 #ifdef __APPLE__
 	pthread_setname_np("fuse_prune_nodes");
 #else
 	pthread_setname_np(pthread_self(), "fuse_prune_nodes");
+#endif
 #endif
 
 	while(1) {

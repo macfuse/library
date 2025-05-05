@@ -86,9 +86,7 @@
 	typeof(vanilla) name;
 #endif
 
-#if (defined(__cplusplus) && __cplusplus >= 201103L) ||        \
-	(!defined(__cplusplus) && defined(__STDC_VERSION__) && \
-	 __STDC_VERSION__ >= 201112L)
+#ifdef HAVE_STATIC_ASSERT
 #define fuse_static_assert(condition, message) static_assert(condition, message)
 #else
 #define fuse_static_assert(condition, message)
