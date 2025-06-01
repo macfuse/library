@@ -897,7 +897,7 @@ void fuse_pollhandle_destroy(struct fuse_pollhandle *ph);
 #ifdef __APPLE__
 
 struct fuse_darwin_attr {
-	ino64_t ino;
+	ino_t ino;
 	mode_t mode;
 	nlink_t nlink;
 	uid_t uid;
