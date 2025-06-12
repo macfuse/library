@@ -869,11 +869,13 @@ static int hash_name(struct fuse *f, struct node *node, fuse_ino_t parentid,
 		     const char *name)
 {
 #ifdef __APPLE__
-	char name_normalized[MAXPATHLEN];
-	if (normalize_name(f, name, name_normalized,
-			   sizeof(name_normalized)) == -1)
-		return -1;
-	name = name_normalized;
+	if (f->conf.norm_insensitive) {
+		char name_normalized[MAXPATHLEN];
+		if (normalize_name(f, name, name_normalized,
+				   sizeof(name_normalized)) == -1)
+			return -1;
+		name = name_normalized;
+	}
 #endif /* __APPLE__ */
 
 	size_t hash = name_hash(f, parentid, name);
@@ -936,11 +938,13 @@ static struct node *lookup_node(struct fuse *f, fuse_ino_t parent,
 				const char *name)
 {
 #ifdef __APPLE__
-	char name_normalized[MAXPATHLEN];
-	if (normalize_name(f, name, name_normalized,
-			   sizeof(name_normalized)) == -1)
-		return NULL;
-	name = name_normalized;
+	if (f->conf.norm_insensitive) {
+		char name_normalized[MAXPATHLEN];
+		if (normalize_name(f, name, name_normalized,
+				   sizeof(name_normalized)) == -1)
+			return NULL;
+		name = name_normalized;
+	}
 #endif /* __APPLE__ */
 
 	size_t hash = name_hash(f, parent, name);
