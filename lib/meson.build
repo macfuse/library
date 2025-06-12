@@ -31,7 +31,8 @@ if host_machine.system().startswith('netbsd')
    deps += [ cc.find_library('perfuse'),
              cc.find_library('puffs') ]
 elif host_machine.system() == 'darwin'
-   deps += [ dependency('appleframeworks', modules: 'CoreFoundation'),
+   deps += [ cc.find_library('icucore'),
+             dependency('appleframeworks', modules: 'CoreFoundation'),
              dependency('appleframeworks', modules: 'DiskArbitration') ]
 else
    # Required for clock_gettime before glibc 2.17

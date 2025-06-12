@@ -51,7 +51,49 @@
 #include <sys/file.h>
 
 #ifdef __APPLE__
-#include <iconv.h>
+/*
+ * File names are not always passed to libfuse in a consistent Unicode
+ * representation. This means that we need to normalize file names (convert them
+ * to their NFD representaion) before perfomring any file name caching or
+ * cache lookups.
+ *
+ * We have been using CoreFoundation for this purpose, but invoking
+ * CFStringNormalize() after daemonizing the file system process results in a
+ * "crashed on child side of fork pre-exec" crash. CoreFoundation is not
+ * async-signal safe.
+ *
+ * Using iconv() is not a viable option either, as the version bundled with
+ * macOS lacks support for the full range of Unicode characters (emojis).
+ *
+ * macOS includes libicucore, which appears to be our best option for
+ * normalizing file names. However, macOS does not provide the corresponding
+ * header files. Since we rely on only a small subset of libicucore, we declare
+ * the needed symbols here.
+ */
+
+typedef uint16_t UChar;
+
+typedef enum {
+	U_ZERO_ERROR = 0
+} UErrorCode;
+
+#define U_FAILURE(x) ((x) > U_ZERO_ERROR)
+const char *u_errorName(UErrorCode code);
+
+UChar *u_strFromUTF8(UChar *dest, int32_t destCapacity, int32_t *pDestLength,
+		     const char *src, int32_t srcLength,
+		     UErrorCode *pErrorCode);
+char *u_strToUTF8(char *dest, int32_t destCapacity, int32_t *pDestLength,
+		  const UChar *src, int32_t srcLength, UErrorCode *pErrorCode);
+
+struct UNormalizer2;
+typedef struct UNormalizer2 UNormalizer2;
+
+const UNormalizer2 *unorm2_getNFDInstance(UErrorCode *pErrorCode);
+
+int32_t unorm2_normalize(const UNormalizer2 *norm2, const UChar *src,
+			 int32_t length, UChar *dest, int32_t capacity,
+			 UErrorCode *pErrorCode);
 #endif
 
 #define FUSE_NODE_SLAB 1
@@ -130,7 +172,7 @@ struct fuse {
 	struct node_table name_table;
 	struct node_table id_table;
 #ifdef __APPLE__
-	iconv_t name_converter;
+	const UNormalizer2 *name_normalizer;
 #endif
 	struct list_head lru_table;
 	fuse_ino_t ctr;
@@ -829,17 +871,37 @@ static void rehash_name(struct fuse *f)
 #ifdef __APPLE__
 
 static inline int normalize_name(struct fuse *f, const char *in, char *out,
-				 size_t out_size)
+				 size_t out_length)
 {
-	size_t in_left = strlen(in);
-	char *dst = out;
-	size_t dst_left = out_size - 1;
+	UErrorCode error = U_ZERO_ERROR;
+	UChar uin[MAXPATHLEN];
+	int32_t uin_length = 0;
+	UChar unfd[MAXPATHLEN];
+	int32_t unfd_length = 0;
 
-	if (iconv(f->name_converter, (char **)&in, &in_left, &dst,
-		  &dst_left) != 0)
+	u_strFromUTF8(uin, MAXPATHLEN, &uin_length, in, -1, &error);
+	if (U_FAILURE(error)) {
+		fuse_log(FUSE_LOG_ERR, "fuse: u_strFromUTF8 failed: %s\n",
+			 u_errorName(error));
 		return -1;
+	}
 
-	*dst = '\0';
+	unfd_length = unorm2_normalize(f->name_normalizer, uin, uin_length,
+				       unfd, MAXPATHLEN, &error);
+	if (U_FAILURE(error)) {
+		fuse_log(FUSE_LOG_ERR, "fuse: unorm2_normalize failed: %s\n",
+			 u_errorName(error));
+		return -1;
+	}
+
+	u_strToUTF8(out, out_length, NULL, unfd, unfd_length, &error);
+	if (U_FAILURE(error)) {
+		fuse_log(FUSE_LOG_ERR, "fuse: u_strToUTF8 failed: %s\n",
+			 u_errorName(error));
+		return -1;
+	}
+
+	out[out_length - 1] = '\0';
 	return 0;
 }
 
@@ -6386,10 +6448,15 @@ struct fuse *_fuse_new_31(struct fuse_args *args,
 		goto out_free_name_table;
 
 #ifdef __APPLE__
-	f->name_converter = iconv_open("UTF-8-MAC", "");
-	if (f->name_converter == (iconv_t)-1) {
-		fuse_log(FUSE_LOG_ERR, "fuse: failed to open name converter\n");
-		goto out_free_id_table;
+	{
+		UErrorCode error = U_ZERO_ERROR;
+		f->name_normalizer = unorm2_getNFDInstance(&error);
+		if (U_FAILURE(error)) {
+			fuse_log(FUSE_LOG_ERR,
+				 "fuse: failed to create name normalizer: %s\n",
+				 u_errorName(error));
+			goto out_free_id_table;
+		}
 	}
 #endif
 
@@ -6398,11 +6465,7 @@ struct fuse *_fuse_new_31(struct fuse_args *args,
 	root = alloc_node(f);
 	if (root == NULL) {
 		fuse_log(FUSE_LOG_ERR, "fuse: memory allocation failed\n");
-#ifdef __APPLE__
-		goto out_close_name_converter;
-#else
 		goto out_free_id_table;
-#endif
 	}
 	if (lru_enabled(f)) {
 		struct node_lru *lnode = node_lru(root);
@@ -6418,10 +6481,6 @@ struct fuse *_fuse_new_31(struct fuse_args *args,
 
 	return f;
 
-#ifdef __APPLE__
-out_close_name_converter:
-	(void) iconv_close(f->name_converter);
-#endif
 out_free_id_table:
 	free(f->id_table.array);
 out_free_name_table:
@@ -6548,10 +6607,6 @@ void fuse_destroy(struct fuse *f)
 	}
 	assert(list_empty(&f->partial_slabs));
 	assert(list_empty(&f->full_slabs));
-
-#ifdef __APPLE__
-	(void) iconv_close(f->name_converter);
-#endif
 
 	while (fuse_modules) {
 		fuse_put_module(fuse_modules);
