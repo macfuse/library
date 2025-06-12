@@ -80,7 +80,7 @@ AM_ICONV
 libfuse_libs="$libfuse_libs $LTLIBICONV"
 AM_CONDITIONAL(ICONV, test "$am_cv_func_iconv" = yes)
 if test "$arch" = darwin; then
-    libfuse_libs="$libfuse_libs -framework CoreFoundation -framework DiskArbitration"
+    libfuse_libs="$libfuse_libs -licucore -framework CoreFoundation -framework DiskArbitration"
 fi
 AC_SUBST(libfuse_libs)
 
