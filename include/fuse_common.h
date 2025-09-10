@@ -86,12 +86,6 @@
 	typeof(vanilla) name;
 #endif
 
-#ifdef HAVE_STATIC_ASSERT
-#define fuse_static_assert(condition, message) static_assert(condition, message)
-#else
-#define fuse_static_assert(condition, message)
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -185,8 +179,6 @@ struct fuse_file_info {
 
 	uint64_t reserved[2];
 };
-fuse_static_assert(sizeof(struct fuse_file_info) == 64,
-		   "fuse_file_info size mismatch");
 
 /**
  * Configuration parameters passed to fuse_session_loop_mt() and
@@ -795,13 +787,6 @@ struct fuse_conn_info {
 	 */
 	uint32_t reserved[16];
 };
-#ifdef __APPLE__
-fuse_static_assert(sizeof(struct fuse_conn_info) == 144,
-		   "Size of struct fuse_conn_info must be 144 bytes");
-#else
-fuse_static_assert(sizeof(struct fuse_conn_info) == 128,
-		   "Size of struct fuse_conn_info must be 128 bytes");
-#endif
 
 struct fuse_session;
 struct fuse_pollhandle;
@@ -1220,52 +1205,46 @@ void fuse_loop_cfg_convert(struct fuse_loop_config *config,
 			   struct fuse_loop_config_v1 *v1_conf);
 #endif
 
+/**
+ * Set a feature flag in the want_ext field of fuse_conn_info.
+ *
+ * @param conn connection information
+ * @param flag feature flag to be set
+ * @return true if the flag was set, false if the flag is not supported
+ */
+bool fuse_set_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
-static inline bool fuse_set_feature_flag(struct fuse_conn_info *conn,
-					 uint64_t flag)
-{
-	if (conn->capable_ext & flag) {
-		conn->want_ext |= flag;
-		return true;
-	}
-	return false;
-}
+/**
+ * Unset a feature flag in the want_ext field of fuse_conn_info.
+ *
+ * @param conn connection information
+ * @param flag feature flag to be unset
+ */
+void fuse_unset_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
-static inline void fuse_unset_feature_flag(struct fuse_conn_info *conn,
-					 uint64_t flag)
-{
-	conn->want_ext &= ~flag;
-}
+/**
+ * Get the value of a feature flag in the want_ext field of fuse_conn_info.
+ *
+ * @param conn connection information
+ * @param flag feature flag to be checked
+ * @return true if the flag is set, false otherwise
+ */
+bool fuse_get_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
-static inline bool fuse_get_feature_flag(struct fuse_conn_info *conn,
-					     uint64_t flag)
-{
-	return conn->capable_ext & flag ? true : false;
-}
+/*
+ * DO NOT USE: Not part of public API, for internal test use only.
+ * The function signature or any use of it is not guaranteeed to
+ * remain stable. And neither are results of what this function does.
+ */
+int fuse_convert_to_conn_want_ext(struct fuse_conn_info *conn);
 
 #ifdef __APPLE__
 
-static inline bool fuse_darwin_set_feature_flag(struct fuse_conn_info *conn,
-						uint64_t flag)
-{
-	if (conn->capable_darwin & flag) {
-		conn->want_darwin |= flag;
-		return true;
-	}
-	return false;
-}
+bool fuse_darwin_set_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
-static inline void fuse_darwin_unset_feature_flag(struct fuse_conn_info *conn,
-						  uint64_t flag)
-{
-	conn->want_darwin &= ~flag;
-}
+void fuse_darwin_unset_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
-static inline bool fuse_darwin_get_feature_flag(struct fuse_conn_info *conn,
-						uint64_t flag)
-{
-	return conn->capable_darwin & flag ? true : false;
-}
+bool fuse_darwin_get_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
 #endif
 
