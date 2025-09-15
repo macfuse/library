@@ -62,28 +62,28 @@
 
 #if defined(__APPLE__) && FUSE_DARWIN_ENABLE_EXTENSIONS
 #define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
-	typeof(darwin) name DARWIN_SYMBOL(name);
+	__typeof__(darwin) name DARWIN_SYMBOL(name);
 #elif defined(__APPLE__)
 #define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
-	typeof(vanilla) name; \
-	typeof(darwin) name ## $DARWIN;
+	__typeof__(vanilla) name; \
+	__typeof__(darwin) name ## $DARWIN;
 #else
 #define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
-	typeof(vanilla) name;
+	__typeof__(vanilla) name;
 #endif
 
 #if defined(__APPLE__) && FUSE_DARWIN_ENABLE_EXTENSIONS
 #define FUSE_DARWIN_EXTEND_OPERATION(name, vanilla, darwin) \
-	typeof(darwin) name;
+	__typeof__(darwin) name;
 #elif defined(__APPLE__) && FUSE_DARWIN_OVERLOAD_OPERATIONS
 #define FUSE_DARWIN_EXTEND_OPERATION(name, _vanilla, _darwin) \
 	union { \
-		typeof(_vanilla) vanilla; \
-		typeof(_darwin) darwin; \
+		__typeof__(_vanilla) vanilla; \
+		__typeof__(_darwin) darwin; \
 	} name;
 #else
 #define FUSE_DARWIN_EXTEND_OPERATION(name, vanilla, darwin) \
-	typeof(vanilla) name;
+	__typeof__(vanilla) name;
 #endif
 
 #ifdef __cplusplus
