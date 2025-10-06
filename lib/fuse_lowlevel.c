@@ -1464,6 +1464,15 @@ static void do_setattr(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	struct fuse_setattr_in *arg = (struct fuse_setattr_in *) inarg;
 
 #ifdef __APPLE__
+	/*
+	 * In macFUSE, support for ctime has existed before ctime support was
+	 * added for FUSE on Linux. We need to make sure to map FATTR_CHGTIME to
+	 * FATTR_CTIME.
+	 */
+	if (arg->valid & FATTR_CHGTIME) {
+		arg->valid |= FATTR_CTIME;
+	}
+
 	if (req->se->version.darwin_extensions_enabled) {
 		if (req->se->op.setattr.darwin) {
 			struct fuse_file_info *fi = NULL;
@@ -1490,7 +1499,6 @@ static void do_setattr(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 				FUSE_SET_ATTR_MTIME_NOW |
 				FUSE_SET_ATTR_CTIME	|
 				FUSE_SET_ATTR_CRTIME	|
-				FUSE_SET_ATTR_CHGTIME	|
 				FUSE_SET_ATTR_BKUPTIME	|
 				FUSE_SET_ATTR_FLAGS;
 
