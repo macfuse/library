@@ -1773,7 +1773,7 @@ int fuse_fs_getattr$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.getattr.darwin) {
 		if (fs->debug) {
 			char buf[10];
-			fuse_log(FUSE_LOG_DEBUG, "getattr[%s] %s\n",
+			fuse_log(FUSE_LOG_DEBUG, "getattr[%s] (Darwin) %s\n",
 				file_info_string(fi, buf, sizeof(buf)),
 				path);
 		}
@@ -1814,7 +1814,7 @@ int fuse_fs_setattr$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.setattr) {
 		if (fs->debug) {
 			char buf[10];
-			fuse_log(FUSE_LOG_DEBUG, "setattr[%s] %s\n",
+			fuse_log(FUSE_LOG_DEBUG, "setattr[%s] (Darwin) %s\n",
 				 file_info_string(fi, buf, sizeof(buf)),
 				 path);
 		}
@@ -2280,10 +2280,11 @@ int fuse_fs_readdir$DARWIN(struct fuse_fs *fs, const char *path, void *buf,
 	fuse_get_context()->private_data = fs->user_data;
 	if (fs->op.readdir.darwin) {
 		if (fs->debug) {
-			fuse_log(FUSE_LOG_DEBUG, "readdir%s[%llu] from %llu\n",
-				(flags & FUSE_READDIR_PLUS) ? "plus" : "",
-				(unsigned long long) fi->fh,
-				(unsigned long long) off);
+			fuse_log(FUSE_LOG_DEBUG,
+				 "readdir%s[%llu] (Darwin) from %llu\n",
+				 (flags & FUSE_READDIR_PLUS) ? "plus" : "",
+				 (unsigned long long) fi->fh,
+				 (unsigned long long) off);
 		}
 
 		return fs->op.readdir.darwin(path, buf, filler, off, fi, flags);
@@ -2507,7 +2508,7 @@ int fuse_fs_setxattr$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.setxattr.darwin) {
 		if (fs->debug)
 			fuse_log(FUSE_LOG_DEBUG,
-				 "setxattr %s %s %lu 0x%x %du\n",
+				 "setxattr (Darwin) %s %s %lu 0x%x %du\n",
 				 path, name, (unsigned long) size, flags,
 				 position);
 
@@ -2562,7 +2563,7 @@ int fuse_fs_getxattr$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.getxattr.darwin) {
 		if (fs->debug)
 			fuse_log(FUSE_LOG_DEBUG,
-				 "getxattr %s %s %lu %du\n",
+				 "getxattr (Darwin) %s %s %lu %du\n",
 				 path, name, (unsigned long) size,
 				 position);
 
@@ -2756,9 +2757,10 @@ int fuse_fs_chflags$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.chflags) {
 		if (fs->debug) {
 			char buf[10];
-			fuse_log(FUSE_LOG_DEBUG, "chflags[%s] %s %du\n",
-				file_info_string(fi, buf, sizeof(buf)), path,
-				flags);
+			fuse_log(FUSE_LOG_DEBUG,
+				 "chflags[%s] (Darwin) %s %du\n",
+				 file_info_string(fi, buf, sizeof(buf)), path,
+				 flags);
 		}
 		return fs->op.chflags(path, fi, flags);
 	} else {
@@ -2771,7 +2773,7 @@ int fuse_fs_setvolname$DARWIN(struct fuse_fs *fs, const char *name)
 	fuse_get_context()->private_data = fs->user_data;
 	if (fs->op.setvolname) {
 		if (fs->debug)
-			fuse_log(FUSE_LOG_DEBUG, "setvolname %s\n");
+			fuse_log(FUSE_LOG_DEBUG, "setvolname (Darwin) %s\n");
 
 		return fs->op.setvolname(name);
 	} else {
@@ -3237,7 +3239,8 @@ static void fuse_lib_lookup$DARWIN(fuse_req_t req, fuse_ino_t parent,
 			pthread_mutex_lock(&f->lock);
 			if (len == 1) {
 				if (f->conf.debug)
-					fuse_log(FUSE_LOG_DEBUG, "LOOKUP-DOT\n");
+					fuse_log(FUSE_LOG_DEBUG,
+						 "LOOKUP-DOT (Darwin)\n");
 				dot = get_node_nocheck(f, parent);
 				if (dot == NULL) {
 					pthread_mutex_unlock(&f->lock);
@@ -3247,7 +3250,8 @@ static void fuse_lib_lookup$DARWIN(fuse_req_t req, fuse_ino_t parent,
 				dot->refctr++;
 			} else {
 				if (f->conf.debug)
-					fuse_log(FUSE_LOG_DEBUG, "LOOKUP-DOTDOT\n");
+					fuse_log(FUSE_LOG_DEBUG,
+						 "LOOKUP-DOTDOT (Darwin)\n");
 				parent = get_node(f, parent)->parent->nodeid;
 			}
 			pthread_mutex_unlock(&f->lock);
@@ -3259,7 +3263,7 @@ static void fuse_lib_lookup$DARWIN(fuse_req_t req, fuse_ino_t parent,
 	if (!err) {
 		struct fuse_intr_data d;
 		if (f->conf.debug)
-			fuse_log(FUSE_LOG_DEBUG, "LOOKUP %s\n", path);
+			fuse_log(FUSE_LOG_DEBUG, "LOOKUP (Darwin) %s\n", path);
 		fuse_prepare_interrupt(f, req, &d);
 		err = lookup_path$DARWIN(f, parent, name, path, &e, NULL);
 		if (err == -ENOENT && f->conf.negative_timeout != 0.0) {
@@ -5068,6 +5072,35 @@ static void fuse_lib_statfs(fuse_req_t req, fuse_ino_t ino)
 		reply_err(req, err);
 }
 
+#ifdef __APPLE__
+
+static void fuse_lib_statfs$DARWIN(fuse_req_t req, fuse_ino_t ino)
+{
+	struct fuse *f = req_fuse_prepare(req);
+	struct statfs buf;
+	char *path = NULL;
+	int err = 0;
+
+	memset(&buf, 0, sizeof(buf));
+	if (ino)
+		err = get_path(f, ino, &path);
+
+	if (!err) {
+		struct fuse_intr_data d;
+		fuse_prepare_interrupt(f, req, &d);
+		err = fuse_fs_statfs$DARWIN(f->fs, path ? path : "/", &buf);
+		fuse_finish_interrupt(f, req, &d);
+		free_path(f, ino, path);
+	}
+
+	if (!err)
+		fuse_reply_statfs$DARWIN(req, &buf);
+	else
+		reply_err(req, err);
+}
+
+#endif
+
 static void fuse_lib_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 			      const char *value, size_t size, int flags)
 {
@@ -5827,8 +5860,8 @@ static struct fuse_lowlevel_ops fuse_path_ops = {
 	.readdirplus = fuse_lib_readdirplus,
 	.releasedir = fuse_lib_releasedir,
 	.fsyncdir = fuse_lib_fsyncdir,
-	.statfs = fuse_lib_statfs,
 #ifndef __APPLE__
+	.statfs = fuse_lib_statfs,
 	.setxattr = fuse_lib_setxattr,
 	.getxattr = fuse_lib_getxattr,
 #endif
@@ -6345,6 +6378,7 @@ struct fuse *_fuse_new_31(struct fuse_args *args,
 		llop.symlink = fuse_lib_symlink$DARWIN;
 		llop.link = fuse_lib_link$DARWIN;
 		llop.create = fuse_lib_create$DARWIN;
+		llop.statfs = fuse_lib_statfs$DARWIN;
 		llop.setxattr.darwin = fuse_lib_setxattr$DARWIN;
 		llop.getxattr.darwin = fuse_lib_getxattr$DARWIN;
 	} else {
@@ -6356,6 +6390,7 @@ struct fuse *_fuse_new_31(struct fuse_args *args,
 		llop.symlink = fuse_lib_symlink;
 		llop.link = fuse_lib_link;
 		llop.create = fuse_lib_create;
+		llop.statfs = fuse_lib_statfs;
 		llop.setxattr.vanilla = fuse_lib_setxattr;
 		llop.getxattr.vanilla = fuse_lib_getxattr;
 	}

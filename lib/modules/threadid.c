@@ -602,7 +602,7 @@ static struct fuse_fs *threadid_new(struct fuse_args *args,
 		oper.setxattr.vanilla = threadid_setxattr;
 		oper.getxattr.vanilla = threadid_getxattr;
 	}
-	fs = fuse_fs_new(&threadid_oper, sizeof(threadid_oper), t);
+	fs = fuse_fs_new(&oper, sizeof(oper), t);
 	if (!fs)
 		goto out_free;
 

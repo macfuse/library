@@ -131,9 +131,10 @@ static int volicon_getattr$DARWIN(const char *path,
 		attr->atimespec.tv_sec = volicon_get()->volicon_time;
 		attr->ctimespec = attr->atimespec;
 		attr->mtimespec = attr->atimespec;
-	} else
+	} else {
 		res = fuse_fs_getattr$DARWIN(volicon_get()->next, path, attr,
 					     fi);
+	}
 
 	return res;
 }
