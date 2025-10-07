@@ -228,7 +228,7 @@ enum fuse_notify_entry_flags {
 #define FUSE_SET_ATTR_TIMES_SET	(1 << 16)
 #define FUSE_SET_ATTR_TOUCH	(1 << 17)
 #ifdef __APPLE__
-#define FUSE_SET_ATTR_CRTIME	(1 << 28)
+#define FUSE_SET_ATTR_BTIME	(1 << 28)
 #define FUSE_SET_ATTR_BKUPTIME	(1 << 30)
 #define FUSE_SET_ATTR_FLAGS	(1 << 31)
 #endif

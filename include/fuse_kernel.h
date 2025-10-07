@@ -268,13 +268,13 @@ struct fuse_attr {
 	uint64_t	mtime;
 	uint64_t	ctime;
 #ifdef __APPLE__
-	uint64_t	crtime;
+	uint64_t	btime;
 #endif
 	uint32_t	atimensec;
 	uint32_t	mtimensec;
 	uint32_t	ctimensec;
 #ifdef __APPLE__
-	uint32_t	crtimensec;
+	uint32_t	btimensec;
 #endif
 	uint32_t	mode;
 	uint32_t	nlink;
@@ -283,7 +283,7 @@ struct fuse_attr {
 	uint32_t	rdev;
 #ifdef __APPLE__
 	/*
-	 * TODO(bf) Is there a better way of dealing with two flags fileds? The
+	 * TODO(bf) Is there a better way of dealing with two flags fields? The
 	 * flags_darwin field (originally named flags) was introduced before the
 	 * official flags field below.
 	 */
@@ -291,6 +291,14 @@ struct fuse_attr {
 #endif
 	uint32_t	blksize;
 	uint32_t	flags;
+#ifdef __APPLE__
+	/*
+	 * TODO(bf) Currently there is no way for us to pass bkuptime to the
+	 * kernel when replying to FUSE_GETATTR. The only option would be
+	 * implementing FUSE_GETXTIMES, which is not very appealing. We will
+	 * need to extend fuse_attr in a future ABI version.
+	 */
+#endif
 };
 
 /*
@@ -363,8 +371,8 @@ struct fuse_file_lock {
 #define FATTR_CTIME	(1 << 10)
 #define FATTR_KILL_SUIDGID	(1 << 11)
 #ifdef __APPLE__
-#define FATTR_CRTIME	(1 << 28)
-#define FATTR_CHGTIME	(1 << 29)
+#define FATTR_BTIME	(1 << 28)
+#define FATTR_DARWIN_CTIME	(1 << 29)
 #define FATTR_BKUPTIME	(1 << 30)
 #define FATTR_FLAGS	(1 << 31)
 #endif
@@ -753,9 +761,9 @@ struct fuse_attr_out {
 
 struct fuse_getxtimes_out {
 	uint64_t	bkuptime;
-	uint64_t	crtime;
+	uint64_t	btime;
 	uint32_t	bkuptimensec;
-	uint32_t	crtimensec;
+	uint32_t	btimensec;
 };
 
 #endif
@@ -823,11 +831,17 @@ struct fuse_setattr_in {
 	uint32_t	unused5;
 #ifdef __APPLE__
 	uint64_t	bkuptime;
-	uint64_t	chgtime;
-	uint64_t	crtime;
+	/*
+	 * TODO(bf) Is there a better way of dealing with two ctime(nsec)
+	 * values? The ctime(nsec)_darwin values (originally named chgtime and
+	 * chgtimensec) were introduced before the official ctime(nsec) values
+	 * above.
+	 */
+	uint64_t	ctime_darwin;
+	uint64_t	btime;
 	uint32_t	bkuptimensec;
-	uint32_t	chgtimensec;
-	uint32_t	crtimensec;
+	uint32_t	ctimensec_darwin;
+	uint32_t	btimensec;
 	uint32_t	flags; /* file flags; see chflags(2) */
 #endif
 };

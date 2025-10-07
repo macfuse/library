@@ -81,13 +81,13 @@ static void convert_stat(const struct stat *stbuf, struct fuse_attr *attr)
 	attr->mtime	= stbuf->st_mtime;
 	attr->ctime	= stbuf->st_ctime;
 #ifdef __APPLE__
-	attr->crtime	= stbuf->st_birthtime;
+	attr->btime	= stbuf->st_birthtimespec.tv_sec;
 #endif
 	attr->atimensec = ST_ATIM_NSEC(stbuf);
 	attr->mtimensec = ST_MTIM_NSEC(stbuf);
 	attr->ctimensec = ST_CTIM_NSEC(stbuf);
 #ifdef __APPLE__
-	attr->crtimensec = ST_CRTIM_NSEC(stbuf);
+	attr->btimensec = stbuf->st_birthtimespec.tv_nsec;
 #endif
 }
 
@@ -100,14 +100,14 @@ static void convert_attr(const struct fuse_setattr_in *attr, struct stat *stbuf)
 	stbuf->st_atime	       = attr->atime;
 	stbuf->st_mtime	       = attr->mtime;
 #ifdef __APPLE__
-	stbuf->st_ctime        = attr->chgtime;
+	stbuf->st_ctime        = attr->ctime_darwin;
 #else
 	stbuf->st_ctime        = attr->ctime;
 #endif
 	ST_ATIM_NSEC_SET(stbuf, attr->atimensec);
 	ST_MTIM_NSEC_SET(stbuf, attr->mtimensec);
 #ifdef __APPLE__
-	ST_CTIM_NSEC_SET(stbuf, attr->chgtimensec);
+	ST_CTIM_NSEC_SET(stbuf, attr->ctimensec_darwin);
 #else
 	ST_CTIM_NSEC_SET(stbuf, attr->ctimensec);
 #endif
@@ -124,11 +124,11 @@ static void convert_attr_out$DARWIN(const struct fuse_darwin_attr *in_attr,
 	out_attr->atime		= in_attr->atimespec.tv_sec;
 	out_attr->mtime		= in_attr->mtimespec.tv_sec;
 	out_attr->ctime		= in_attr->ctimespec.tv_sec;
-	out_attr->crtime	= in_attr->crtimespec.tv_sec;
+	out_attr->btime		= in_attr->btimespec.tv_sec;
 	out_attr->atimensec 	= in_attr->atimespec.tv_nsec;
 	out_attr->mtimensec 	= in_attr->mtimespec.tv_nsec;
 	out_attr->ctimensec 	= in_attr->ctimespec.tv_nsec;
-	out_attr->crtimensec	= in_attr->crtimespec.tv_nsec;
+	out_attr->btimensec	= in_attr->btimespec.tv_nsec;
 	out_attr->mode		= in_attr->mode;
 	out_attr->nlink		= in_attr->nlink;
 	out_attr->uid		= in_attr->uid;
@@ -148,10 +148,10 @@ static void convert_attr_in$DARWIN(const struct fuse_setattr_in *in_attr,
 	out_attr->atimespec.tv_nsec	= in_attr->atimensec;
 	out_attr->mtimespec.tv_sec	= in_attr->mtime;
 	out_attr->mtimespec.tv_nsec	= in_attr->mtimensec;
-	out_attr->ctimespec.tv_sec	= in_attr->chgtime;
-	out_attr->ctimespec.tv_nsec	= in_attr->chgtimensec;
-	out_attr->crtimespec.tv_sec	= in_attr->crtime;
-	out_attr->crtimespec.tv_nsec	= in_attr->crtimensec;
+	out_attr->ctimespec.tv_sec	= in_attr->ctime_darwin;
+	out_attr->ctimespec.tv_nsec	= in_attr->ctimensec_darwin;
+	out_attr->btimespec.tv_sec	= in_attr->btime;
+	out_attr->btimespec.tv_nsec	= in_attr->btimensec;
 	out_attr->bkuptimespec.tv_sec	= in_attr->bkuptime;
 	out_attr->bkuptimespec.tv_nsec	= in_attr->bkuptimensec;
 	out_attr->size 			= in_attr->size;
@@ -1466,10 +1466,10 @@ static void do_setattr(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 #ifdef __APPLE__
 	/*
 	 * In macFUSE, support for ctime has existed before ctime support was
-	 * added for FUSE on Linux. We need to make sure to map FATTR_CHGTIME to
-	 * FATTR_CTIME.
+	 * added for FUSE on Linux. We need to make sure to map
+	 * FATTR_DARWIN_CTIME to FATTR_CTIME.
 	 */
-	if (arg->valid & FATTR_CHGTIME) {
+	if (arg->valid & FATTR_DARWIN_CTIME) {
 		arg->valid |= FATTR_CTIME;
 	}
 
@@ -1498,7 +1498,7 @@ static void do_setattr(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 				FUSE_SET_ATTR_ATIME_NOW	|
 				FUSE_SET_ATTR_MTIME_NOW |
 				FUSE_SET_ATTR_CTIME	|
-				FUSE_SET_ATTR_CRTIME	|
+				FUSE_SET_ATTR_BTIME	|
 				FUSE_SET_ATTR_BKUPTIME	|
 				FUSE_SET_ATTR_FLAGS;
 

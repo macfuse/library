@@ -891,7 +891,7 @@ struct fuse_darwin_attr {
 	struct timespec atimespec;
 	struct timespec mtimespec;
 	struct timespec ctimespec;
-	struct timespec crtimespec;
+	struct timespec btimespec;
 	struct timespec bkuptimespec;
 	off_t size;
 	blkcnt_t blocks;

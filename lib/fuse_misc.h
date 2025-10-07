@@ -42,10 +42,6 @@
 #define ST_ATIM_NSEC_SET(stbuf, val) (stbuf)->st_atimespec.tv_nsec = (val)
 #define ST_CTIM_NSEC_SET(stbuf, val) (stbuf)->st_ctimespec.tv_nsec = (val)
 #define ST_MTIM_NSEC_SET(stbuf, val) (stbuf)->st_mtimespec.tv_nsec = (val)
-#ifdef __APPLE__
-#define ST_CRTIM_NSEC(stbuf) ((stbuf)->st_birthtimespec.tv_nsec)
-#define ST_CRTIM_NSEC_SET(stbuf, val) (stbuf)->st_birthtimespec.tv_nsec = (val)
-#endif
 #else
 #define ST_ATIM_NSEC(stbuf) 0
 #define ST_CTIM_NSEC(stbuf) 0
