@@ -784,19 +784,27 @@ FUSE_DARWIN_EXTEND_OPERATION(
 		     struct flock *);
 
 	/**
-	 * Change the access and modification times of a file with
+	 * Change the access, modification and backup times of a file with
 	 * nanosecond resolution
 	 *
 	 * This supersedes the old utime() interface.  New applications
 	 * should use this.
+	 *
+	 * `tv` contains the access and modification times of the file. On
+	 * Darwin, it also contains the backup time of the file.
 	 *
 	 * `fi` will always be NULL if the file is not currently open, but
 	 * may also be NULL if the file is open.
 	 *
 	 * See the utimensat(2) man page for details.
 	 */
-	 int (*utimens) (const char *, const struct timespec tv[2],
-			 struct fuse_file_info *fi);
+	FUSE_DARWIN_EXTEND_OPERATION(
+		utimens,
+		int (*) (const char *, const struct timespec tv[2],
+			 struct fuse_file_info *fi),
+		int (*) (const char *, const struct timespec tv[3],
+			 struct fuse_file_info *fi)
+	)
 
 	/**
 	 * Map block index within file to block index within device
@@ -1447,8 +1455,13 @@ int fuse_fs_chown(struct fuse_fs *fs, const char *path, uid_t uid, gid_t gid,
 		  struct fuse_file_info *fi);
 int fuse_fs_truncate(struct fuse_fs *fs, const char *path, off_t size,
 		     struct fuse_file_info *fi);
-int fuse_fs_utimens(struct fuse_fs *fs, const char *path,
-		    const struct timespec tv[2], struct fuse_file_info *fi);
+FUSE_DARWIN_EXTEND_FUNCTION(
+	fuse_fs_utimens,
+	int (struct fuse_fs *fs, const char *path,
+	     const struct timespec tv[2], struct fuse_file_info *fi),
+	int (struct fuse_fs *fs, const char *path,
+	     const struct timespec tv[3], struct fuse_file_info *fi)
+)
 int fuse_fs_access(struct fuse_fs *fs, const char *path, int mask);
 int fuse_fs_readlink(struct fuse_fs *fs, const char *path, char *buf,
 		     size_t len);

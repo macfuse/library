@@ -395,6 +395,23 @@ static int subdir_utimens(const char *path, const struct timespec ts[2],
 	return err;
 }
 
+#ifdef __APPLE__
+
+static int subdir_utimens$DARWIN(const char *path, const struct timespec ts[3],
+				 struct fuse_file_info *fi)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		err = fuse_fs_utimens$DARWIN(d->next, newpath, ts, fi);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
+
 static int subdir_create(const char *path, mode_t mode,
 			 struct fuse_file_info *fi)
 {
@@ -729,7 +746,9 @@ static const struct fuse_operations subdir_oper = {
 	.chmod		= subdir_chmod,
 	.chown		= subdir_chown,
 	.truncate	= subdir_truncate,
+#ifndef __APPLE__
 	.utimens	= subdir_utimens,
+#endif
 	.create		= subdir_create,
 	.open		= subdir_open,
 	.read_buf	= subdir_read_buf,
@@ -828,12 +847,14 @@ static struct fuse_fs *subdir_new(struct fuse_args *args,
 		if (fuse_fs_darwin_extensions_enabled(next[0])) {
 			oper.getattr.darwin = subdir_getattr$DARWIN;
 			oper.readdir.darwin = subdir_readdir$DARWIN;
+			oper.utimens.darwin = subdir_utimens$DARWIN;
 			oper.statfs.darwin = subdir_statfs$DARWIN;
 			oper.setxattr.darwin = subdir_setxattr$DARWIN;
 			oper.getxattr.darwin = subdir_getxattr$DARWIN;
 		} else {
 			oper.getattr.vanilla = subdir_getattr;
 			oper.readdir.vanilla = subdir_readdir;
+			oper.utimens.vanilla = subdir_utimens;
 			oper.statfs.vanilla = subdir_statfs;
 			oper.setxattr.vanilla = subdir_setxattr;
 			oper.getxattr.vanilla = subdir_getxattr;

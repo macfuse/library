@@ -2422,6 +2422,50 @@ int fuse_fs_truncate(struct fuse_fs *fs, const char *path, off_t size,
 	}
 }
 
+#ifdef __APPLE__
+
+int fuse_fs_utimens$DARWIN(struct fuse_fs *fs, const char *path,
+			   const struct timespec tv[3],
+			   struct fuse_file_info *fi)
+{
+	fuse_get_context()->private_data = fs->user_data;
+	if (fs->op.utimens.darwin) {
+		if (fs->debug) {
+			char buf[10];
+			fuse_log(FUSE_LOG_DEBUG,
+				 "utimens[%s] (Darwin) %s %li.%09lu %li.%09lu %li.%09lu\n",
+				 file_info_string(fi, buf, sizeof(buf)),
+				 path, tv[0].tv_sec, tv[0].tv_nsec,
+				 tv[1].tv_sec, tv[1].tv_nsec, tv[2].tv_sec,
+				 tv[2].tv_nsec);
+		}
+		return fs->op.utimens.darwin(path, tv, fi);
+	} else {
+		return -ENOSYS;
+	}
+}
+
+int fuse_fs_utimens(struct fuse_fs *fs, const char *path,
+		    const struct timespec tv[2], struct fuse_file_info *fi)
+{
+	fuse_get_context()->private_data = fs->user_data;
+	if (fs->op.utimens.vanilla) {
+		if (fs->debug) {
+			char buf[10];
+			fuse_log(FUSE_LOG_DEBUG,
+				 "utimens[%s] %s %li.%09lu %li.%09lu\n",
+				 file_info_string(fi, buf, sizeof(buf)),
+				 path, tv[0].tv_sec, tv[0].tv_nsec,
+				 tv[1].tv_sec, tv[1].tv_nsec);
+		}
+		return fs->op.utimens.vanilla(path, tv, fi);
+	} else {
+		return -ENOSYS;
+	}
+}
+
+#else
+
 int fuse_fs_utimens(struct fuse_fs *fs, const char *path,
 		    const struct timespec tv[2], struct fuse_file_info *fi)
 {
@@ -2439,6 +2483,8 @@ int fuse_fs_utimens(struct fuse_fs *fs, const char *path,
 		return -ENOSYS;
 	}
 }
+
+#endif
 
 int fuse_fs_access(struct fuse_fs *fs, const char *path, int mask)
 {
@@ -3549,12 +3595,14 @@ static void fuse_lib_setattr$DARWIN(fuse_req_t req, fuse_ino_t ino,
 #ifdef HAVE_UTIMENSAT
 		if (!err &&
 		    (valid & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME))) {
-			struct timespec tv[2];
+			struct timespec tv[3];
 
 			tv[0].tv_sec = 0;
 			tv[1].tv_sec = 0;
+			tv[2].tv_sec = 0;
 			tv[0].tv_nsec = UTIME_OMIT;
 			tv[1].tv_nsec = UTIME_OMIT;
+			tv[2].tv_nsec = UTIME_OMIT;
 
 			if (valid & FUSE_SET_ATTR_ATIME_NOW)
 				tv[0].tv_nsec = UTIME_NOW;
@@ -3565,6 +3613,9 @@ static void fuse_lib_setattr$DARWIN(fuse_req_t req, fuse_ino_t ino,
 				tv[1].tv_nsec = UTIME_NOW;
 			else if (valid & FUSE_SET_ATTR_MTIME)
 				tv[1] = attr->mtimespec;
+
+			if (valid & FUSE_SET_ATTR_BKUPTIME)
+				tv[2] = attr->bkuptimespec;
 
 			err = fuse_fs_utimens(f->fs, path, tv, fi);
 		} else

@@ -446,6 +446,23 @@ static int iconv_utimens(const char *path, const struct timespec ts[2],
 	return err;
 }
 
+#ifdef __APPLE__
+
+static int iconv_utimens$DARWIN(const char *path, const struct timespec ts[3],
+				struct fuse_file_info *fi)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_utimens$DARWIN(ic->next, newpath, ts, fi);
+		free(newpath);
+	}
+	return err;
+}
+
+#endif
+
 static int iconv_create(const char *path, mode_t mode,
 			struct fuse_file_info *fi)
 {
@@ -790,7 +807,9 @@ static const struct fuse_operations iconv_oper = {
 	.chmod		= iconv_chmod,
 	.chown		= iconv_chown,
 	.truncate	= iconv_truncate,
+#ifndef __APPLE__
 	.utimens	= iconv_utimens,
+#endif
 	.create		= iconv_create,
 	.open		= iconv_open_file,
 	.read_buf	= iconv_read_buf,
@@ -909,12 +928,14 @@ static struct fuse_fs *iconv_new(struct fuse_args *args,
 		if (fuse_fs_darwin_extensions_enabled(next[0])) {
 			oper.getattr.darwin = iconv_getattr$DARWIN;
 			oper.readdir.darwin = iconv_readdir$DARWIN;
+			oper.utimens.darwin = iconv_utimens$DARWIN;
 			oper.statfs.darwin = iconv_statfs$DARWIN;
 			oper.setxattr.darwin = iconv_setxattr$DARWIN;
 			oper.getxattr.darwin = iconv_getxattr$DARWIN;
 		} else {
 			oper.getattr.vanilla = iconv_getattr;
 			oper.readdir.vanilla = iconv_readdir;
+			oper.utimens.vanilla = iconv_utimens;
 			oper.statfs.vanilla = iconv_statfs;
 			oper.setxattr.vanilla = iconv_setxattr;
 			oper.getxattr.vanilla = iconv_getxattr;

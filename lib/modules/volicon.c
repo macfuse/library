@@ -285,6 +285,18 @@ static int volicon_utimens(const char *path, const struct timespec ts[2],
 	return fuse_fs_utimens(volicon_get()->next, path, ts, fi);
 }
 
+#ifdef __APPLE__
+
+static int volicon_utimens$DARWIN(const char *path, const struct timespec ts[3],
+				  struct fuse_file_info *fi)
+{
+	ERROR_IF_MAGIC_FILE(path, EACCES);
+
+	return fuse_fs_utimens$DARWIN(volicon_get()->next, path, ts, fi);
+}
+
+#endif
+
 static int volicon_create(const char *path, mode_t mode,
 			 struct fuse_file_info *fi)
 {
@@ -675,7 +687,9 @@ static const struct fuse_operations volicon_oper = {
 	.chmod		= volicon_chmod,
 	.chown		= volicon_chown,
 	.truncate	= volicon_truncate,
+#ifndef __APPLE__
 	.utimens	= volicon_utimens,
+#endif
 	.create		= volicon_create,
 	.open		= volicon_open,
 	.read_buf	= volicon_read_buf,
@@ -814,12 +828,14 @@ static struct fuse_fs *volicon_new(struct fuse_args *args,
 	if (fuse_fs_darwin_extensions_enabled(next[0])) {
 		oper.getattr.darwin = volicon_getattr$DARWIN;
 		oper.readdir.darwin = volicon_readdir$DARWIN;
+		oper.utimens.darwin = volicon_utimens$DARWIN;
 		oper.statfs.darwin = volicon_statfs$DARWIN;
 		oper.setxattr.darwin = volicon_setxattr$DARWIN;
 		oper.getxattr.darwin = volicon_getxattr$DARWIN;
 	} else {
 		oper.getattr.vanilla = volicon_getattr;
 		oper.readdir.vanilla = volicon_readdir;
+		oper.utimens.vanilla = volicon_utimens;
 		oper.statfs.vanilla = volicon_statfs;
 		oper.setxattr.vanilla = volicon_setxattr;
 		oper.getxattr.vanilla = volicon_getxattr;

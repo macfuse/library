@@ -250,6 +250,21 @@ static int threadid_utimens(const char *path, const struct timespec ts[2],
 	return res;
 }
 
+#ifdef __APPLE__
+
+static int threadid_utimens$DARWIN(const char *path,
+				   const struct timespec ts[3],
+				   struct fuse_file_info *fi)
+{
+	THREADID_PRE
+	int res = fuse_fs_utimens$DARWIN(threadid_get()->next, path, ts, fi);
+	THREADID_POST
+
+	return res;
+}
+
+#endif
+
 static int threadid_create(const char *path, mode_t mode,
 			   struct fuse_file_info *fi)
 {
@@ -512,7 +527,9 @@ static const struct fuse_operations threadid_oper = {
 	.chmod		= threadid_chmod,
 	.chown		= threadid_chown,
 	.truncate	= threadid_truncate,
+#ifndef __APPLE__
 	.utimens	= threadid_utimens,
+#endif
 	.create		= threadid_create,
 	.open		= threadid_open,
 	.read_buf	= threadid_read_buf,
@@ -592,12 +609,14 @@ static struct fuse_fs *threadid_new(struct fuse_args *args,
 	if (fuse_fs_darwin_extensions_enabled(next[0])) {
 		oper.getattr.darwin = threadid_getattr$DARWIN;
 		oper.readdir.darwin = threadid_readdir$DARWIN;
+		oper.utimens.darwin = threadid_utimens$DARWIN;
 		oper.statfs.darwin = threadid_statfs$DARWIN;
 		oper.setxattr.darwin = threadid_setxattr$DARWIN;
 		oper.getxattr.darwin = threadid_getxattr$DARWIN;
 	} else {
 		oper.getattr.vanilla = threadid_getattr;
 		oper.readdir.vanilla = threadid_readdir;
+		oper.utimens.vanilla = threadid_utimens;
 		oper.statfs.vanilla = threadid_statfs;
 		oper.setxattr.vanilla = threadid_setxattr;
 		oper.getxattr.vanilla = threadid_getxattr;
