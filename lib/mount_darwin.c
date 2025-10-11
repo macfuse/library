@@ -52,6 +52,7 @@ struct mount_opts {
 	bool allow_root;
 	bool quiet_mode;
 	unsigned max_read;
+	char *backend;
 	char *kernel_opts;
 };
 
@@ -60,6 +61,7 @@ static const struct fuse_opt fuse_mount_opts[] = {
 	{ "allow_root", offsetof(struct mount_opts, allow_root), true },
 	{ "quiet", offsetof(struct mount_opts, quiet_mode), true },
 	{ "max_read=%u", offsetof(struct mount_opts, max_read), 1 },
+	{ "backend=%s", offsetof(struct mount_opts, backend), 1 },
 	FUSE_OPT_KEY("allow_root",	      KEY_ALLOW_ROOT),
 	FUSE_OPT_KEY("auto_cache",	      KEY_AUTO_CACHE),
 	FUSE_OPT_KEY("-r",		      KEY_RO),
@@ -174,7 +176,7 @@ static void fuse_mount_run(const char *mount_args)
 	char *mount_tool_path = NULL;
 	char *mount_command = NULL;
 
-	mount_tool_path = fuse_resource_path(FUSE_MOUNT_PROG);
+	mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG);
 	if (!mount_tool_path) {
 		fuse_log(FUSE_LOG_ERR, "fuse: mount tool missing\n");
 		goto out;
@@ -240,7 +242,7 @@ static int fuse_mount_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-void fuse_kern_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd)
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd)
 {
 	if (!disk) {
 		/*
@@ -362,7 +364,11 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 		goto out;
 	}
 
-	mount_tool_path = fuse_resource_path(FUSE_MOUNT_PROG);
+	if (mo->backend && strcmp(mo->backend, "fskit") == 0)
+		mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG_FSKIT);
+	else
+		mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG);
+
 	if (!mount_tool_path) {
 		fuse_log(FUSE_LOG_ERR, "fuse: mount program missing\n");
 		return -1;
@@ -496,12 +502,13 @@ err_out:
 
 void destroy_mount_opts(struct mount_opts *mo)
 {
+	free(mo->backend);
 	free(mo->kernel_opts);
 	free(mo);
 }
 
-int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo,
-		    void (*callback)(void *, int), void *context)
+int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
+		      void (*callback)(void *, int), void *context)
 {
 	if (mo->allow_other && mo->allow_root) {
 		fuse_log(FUSE_LOG_ERR,

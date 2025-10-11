@@ -225,14 +225,14 @@ void fuse_mount_version(void);
 unsigned get_max_read(struct mount_opts *o);
 
 #ifdef __APPLE__
-void fuse_kern_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd);
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd);
 #else
 void fuse_kern_unmount(const char *mountpoint, int fd);
 #endif
 
 #ifdef __APPLE__
-int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo,
-		    void (*callback)(void *, int), void *context);
+int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
+		      void (*callback)(void *, int), void *context);
 #else
 int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo);
 #endif

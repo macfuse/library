@@ -18,6 +18,11 @@
 	"/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse"
 #endif
 
+#ifndef FUSE_MOUNT_PROG_FSKIT
+#define FUSE_MOUNT_PROG_FSKIT \
+    "/Library/Filesystems/macfuse.fs/Contents/Resources/macfuse.app/Contents/MacOS/macfuse"
+#endif
+
 #ifndef FUSE_VOLUME_ICON
 #define FUSE_VOLUME_ICON \
 	"/Library/Filesystems/macfuse.fs/Contents/Resources/Volume.icns"
@@ -33,6 +38,6 @@
 
 #endif /* !LOCK_SH */
 
-char *fuse_resource_path(const char *path);
+char *fuse_darwin_resource_path(const char *path);
 
 #endif /* _FUSE_DARWIN_H_ */

@@ -4182,8 +4182,8 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 	}
 
 	/* Open channel */
-	fd = fuse_kern_mount(mountpoint, se->mo, &fuse_session_mount_callback,
-			     mc);
+	fd = fuse_darwin_mount(mountpoint, se->mo, &fuse_session_mount_callback,
+			       mc);
 	if (fd == -1) {
 		/* fuse_session_mount_callback() is not going to be called */
 		fuse_session_mount_context_destroy(mc);
@@ -4232,7 +4232,7 @@ void fuse_session_unmount(struct fuse_session *se)
 		if (se->exited)
 			options |= kDADiskUnmountOptionForce;
 
-		fuse_kern_unmount(disk, options, se->fd);
+		fuse_darwin_unmount(disk, options, se->fd);
 		CFRelease(disk);
 	}
 #else

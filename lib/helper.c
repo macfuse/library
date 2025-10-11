@@ -504,7 +504,7 @@ int fuse_open_channel(const char *mountpoint, const char* options)
 		return -1;
 
 #ifdef __APPLE__
-	fd = fuse_kern_mount(mountpoint, opts, NULL, NULL);
+	fd = fuse_darwin_mount(mountpoint, opts, NULL, NULL);
 #else
 	fd = fuse_kern_mount(mountpoint, opts);
 #endif

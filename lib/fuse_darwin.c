@@ -21,7 +21,7 @@
 #define EXECUTABLE_PATH "@executable_path/"
 #define LOADER_PATH "@loader_path/"
 
-char *fuse_resource_path(const char *path)
+char *fuse_darwin_resource_path(const char *path)
 {
 	char base_path[MAXPATHLEN];
 	char *relative_path = NULL;
@@ -42,7 +42,7 @@ char *fuse_resource_path(const char *path)
 		Dl_info info;
 
 		/* Path relative to loader */
-		if (!dladdr(&fuse_resource_path, &info)) {
+		if (!dladdr(&fuse_darwin_resource_path, &info)) {
 			return NULL;
 		}
 		stpncpy(base_path, info.dli_fname, sizeof(base_path) - 1);
