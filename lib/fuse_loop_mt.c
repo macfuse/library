@@ -290,6 +290,28 @@ int fuse_start_thread(pthread_t *thread_id, void *(*func)(void *), void *arg)
 	return 0;
 }
 
+#ifdef __APPLE__
+
+static int fuse_clone_chan_fd_default(struct fuse_session *se)
+{
+	int res;
+	int clonefd;
+
+	clonefd = dup(se->fd);
+
+	res = fcntl(clonefd, F_SETFD, FD_CLOEXEC);
+	if (res == -1) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to set CLOEXEC: %s\n",
+			 strerror(errno));
+		close(clonefd);
+		return -1;
+	}
+
+	return clonefd;
+}
+
+#else
+
 static int fuse_clone_chan_fd_default(struct fuse_session *se)
 {
 	int res;
@@ -326,6 +348,8 @@ static int fuse_clone_chan_fd_default(struct fuse_session *se)
 	}
 	return clonefd;
 }
+
+#endif
 
 static struct fuse_chan *fuse_clone_chan(struct fuse_mt *mt)
 {
