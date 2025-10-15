@@ -55,7 +55,6 @@ static int receive_sync(struct fuse_chan **chp, char *buf)
 {
 	struct fuse_chan *ch = *chp;
 	int err;
-	ssize_t res;
 	struct fuse_in_header *in = NULL;
 	size_t size = sizeof(*in);
 	struct fuse_session *se = fuse_chan_session(ch);
