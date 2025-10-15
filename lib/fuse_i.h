@@ -63,6 +63,19 @@ struct fuse_notify_req {
 	struct fuse_notify_req *prev;
 };
 
+#ifdef __APPLE__
+
+struct fuse_custom_io_ctx {
+	void *data;
+	void (*destroy)(void *context);
+};
+
+struct fuse_custom_io_ctx *fuse_custom_io_ctx_new(void *data,
+						  void (*destroy)(void *));
+void fuse_custom_io_ctx_destroy(struct fuse_custom_io_ctx *ioc);
+
+#endif
+
 struct fuse_session {
 #ifdef __APPLE__
 	int ctr;
@@ -73,6 +86,9 @@ struct fuse_session {
 	volatile int exited;
 	int fd;
 	struct fuse_custom_io *io;
+#ifdef __APPLE__
+	struct fuse_custom_io_ctx *ioc;
+#endif
 	struct mount_opts *mo;
 	int debug;
 	int deny_others;
@@ -231,6 +247,8 @@ void fuse_kern_unmount(const char *mountpoint, int fd);
 #endif
 
 #ifdef __APPLE__
+int fuse_darwin_custom_io(struct mount_opts *mo, struct fuse_custom_io **io,
+			  struct fuse_custom_io_ctx **ioc);
 int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
 		      void (*callback)(void *, int), void *context);
 #else

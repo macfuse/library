@@ -12,8 +12,9 @@
 */
 
 #include "fuse_i.h"
-#include "fuse_opt.h"
 #include "fuse_darwin.h"
+#include "fuse_opt.h"
+#include "fuse_socket_io.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -483,7 +484,7 @@ struct mount_opts *parse_mount_opts(struct fuse_args *args)
 {
 	struct mount_opts *mo;
 
-	mo = (struct mount_opts*) malloc(sizeof(struct mount_opts));
+	mo = (struct mount_opts *)malloc(sizeof(struct mount_opts));
 	if (mo == NULL)
 		return NULL;
 
@@ -505,6 +506,32 @@ void destroy_mount_opts(struct mount_opts *mo)
 	free(mo->backend);
 	free(mo->kernel_opts);
 	free(mo);
+}
+
+int fuse_darwin_custom_io(struct mount_opts *mo, struct fuse_custom_io **io,
+			  struct fuse_custom_io_ctx **ioc)
+{
+	*io = NULL;
+	*ioc = NULL;
+
+	if (mo->backend == NULL || strcmp(mo->backend, "fskit") != 0)
+		return 0;
+
+	*io = fuse_socket_io_new();
+	if (*io == NULL)
+		goto err_out;
+
+	*ioc = fuse_socket_io_ctx_new();
+	if (*ioc == NULL)
+		goto err_out;
+
+	return 0;
+
+err_out:
+	free(*io);
+	if (*ioc != NULL)
+		fuse_custom_io_ctx_destroy(*ioc);
+	return -1;
 }
 
 int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,

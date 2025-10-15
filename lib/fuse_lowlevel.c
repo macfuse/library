@@ -265,13 +265,19 @@ static int fuse_send_msg(struct fuse_session *se, struct fuse_chan *ch,
 	}
 
 	ssize_t res;
-	if (se->io != NULL)
+	if (se->io != NULL) {
 		/* se->io->writev is never NULL if se->io is not NULL as
 		specified by fuse_session_custom_io()*/
+#ifdef __APPLE__
 		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
-					   se->userdata);
-	else
+				     se->ioc ? se->ioc->data : se->userdata);
+#else
+		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
+				     se->userdata);
+#endif
+	} else {
 		res = writev(ch ? ch->fd : se->fd, iov, count);
+	}
 
 	int err = errno;
 
@@ -3349,6 +3355,32 @@ static int fuse_ll_copy_from_pipe(struct fuse_bufvec *dst,
 	return 0;
 }
 
+#ifdef __APPLE__
+
+struct fuse_custom_io_ctx *fuse_custom_io_ctx_new(void *data,
+						  void (*destroy)(void *))
+{
+	struct fuse_custom_io_ctx *ioc;
+
+	ioc = malloc(sizeof(struct fuse_custom_io_ctx));
+	if (ioc != NULL) {
+		ioc->data = data;
+		ioc->destroy = destroy;
+	}
+
+	return ioc;
+ }
+
+void fuse_custom_io_ctx_destroy(struct fuse_custom_io_ctx *ioc)
+{
+	if (ioc != NULL) {
+		ioc->destroy(ioc->data);
+		free(ioc);
+	}
+}
+
+#endif
+
 void fuse_session_process_buf(struct fuse_session *se,
 			      const struct fuse_buf *buf)
 {
@@ -3571,6 +3603,11 @@ void fuse_session_destroy(struct fuse_session *se)
 		close(se->fd);
 	if (se->io != NULL)
 		free(se->io);
+#ifdef __APPLE__
+	if (se->ioc != NULL) {
+		fuse_custom_io_ctx_destroy(se->ioc);
+	}
+#endif
 	destroy_mount_opts(se->mo);
 	free(se);
 }
@@ -3774,8 +3811,13 @@ restart:
 	if (se->io != NULL) {
 		/* se->io->read is never NULL if se->io is not NULL as
 		specified by fuse_session_custom_io()*/
+#ifdef __APPLE__
+		res = se->io->read(ch ? ch->fd : se->fd, buf->mem, bufsize,
+				   se->ioc ? se->ioc->data : se->userdata);
+#else
 		res = se->io->read(ch ? ch->fd : se->fd, buf->mem, bufsize,
 				   se->userdata);
+#endif
 	} else {
 		res = read(ch ? ch->fd : se->fd, buf->mem, bufsize);
 	}
@@ -4103,7 +4145,8 @@ static void fuse_session_mount_callback(void *context, int status)
 	DADiskRef disk = NULL;
 
 	if (status != 0) {
-		fprintf(stderr, "fuse: mount failed with error: %d\n", status);
+		fuse_log(FUSE_LOG_ERR, "fuse: mount failed with error: %d\n",
+			 status);
 		goto out;
 	}
 
@@ -4154,6 +4197,13 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 		if (fd > 2)
 			close(fd);
 	} while (fd >= 0 && fd <= 2);
+
+#ifdef __APPLE__
+	if (fuse_darwin_custom_io(se->mo, &se->io, &se->ioc) != 0) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to setup custom io\n");
+		goto error_out;
+	}
+#endif
 
 	/*
 	 * To allow FUSE daemons to run without privileges, the caller may open

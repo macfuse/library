@@ -7,8 +7,8 @@ libfuse_sources = ['fuse.c', 'fuse_i.h', 'fuse_loop.c', 'fuse_loop_mt.c',
 if host_machine.system().startswith('linux')
    libfuse_sources += [ 'mount.c' ]
 elif host_machine.system() == 'darwin'
-   libfuse_sources += [ 'fuse_darwin.c', 'mount_darwin.c', 'modules/threadid.c',
-                        'modules/volicon.c' ]
+   libfuse_sources += [ 'fuse_darwin.c', 'fuse_socket_io.c', 'mount_darwin.c',
+                        'modules/threadid.c', 'modules/volicon.c' ]
 else
    libfuse_sources += [ 'mount_bsd.c' ]
 endif
