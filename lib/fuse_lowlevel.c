@@ -99,18 +99,10 @@ static void convert_attr(const struct fuse_setattr_in *attr, struct stat *stbuf)
 	stbuf->st_size	       = attr->size;
 	stbuf->st_atime	       = attr->atime;
 	stbuf->st_mtime	       = attr->mtime;
-#ifdef __APPLE__
-	stbuf->st_ctime        = attr->ctime_darwin;
-#else
 	stbuf->st_ctime        = attr->ctime;
-#endif
 	ST_ATIM_NSEC_SET(stbuf, attr->atimensec);
 	ST_MTIM_NSEC_SET(stbuf, attr->mtimensec);
-#ifdef __APPLE__
-	ST_CTIM_NSEC_SET(stbuf, attr->ctimensec_darwin);
-#else
 	ST_CTIM_NSEC_SET(stbuf, attr->ctimensec);
-#endif
 }
 
 #ifdef __APPLE__
@@ -134,7 +126,7 @@ static void convert_attr_out$DARWIN(const struct fuse_darwin_attr *in_attr,
 	out_attr->uid		= in_attr->uid;
 	out_attr->gid		= in_attr->gid;
 	out_attr->rdev		= in_attr->rdev;
-	out_attr->flags_darwin  = in_attr->flags;
+	out_attr->flags		= in_attr->flags;
 	out_attr->blksize	= in_attr->blksize;
 }
 
@@ -148,8 +140,8 @@ static void convert_attr_in$DARWIN(const struct fuse_setattr_in *in_attr,
 	out_attr->atimespec.tv_nsec	= in_attr->atimensec;
 	out_attr->mtimespec.tv_sec	= in_attr->mtime;
 	out_attr->mtimespec.tv_nsec	= in_attr->mtimensec;
-	out_attr->ctimespec.tv_sec	= in_attr->ctime_darwin;
-	out_attr->ctimespec.tv_nsec	= in_attr->ctimensec_darwin;
+	out_attr->ctimespec.tv_sec	= in_attr->ctime;
+	out_attr->ctimespec.tv_nsec	= in_attr->ctimensec;
 	out_attr->btimespec.tv_sec	= in_attr->btime;
 	out_attr->btimespec.tv_nsec	= in_attr->btimensec;
 	out_attr->bkuptimespec.tv_sec	= in_attr->bkuptime;
@@ -510,6 +502,13 @@ static void fill_entry$DARWIN(struct fuse_entry_out *arg,
 	arg->attr_valid = calc_timeout_sec(e->attr_timeout);
 	arg->attr_valid_nsec = calc_timeout_nsec(e->attr_timeout);
 	convert_attr_out$DARWIN(&e->attr, &arg->attr);
+
+	/*
+	 * Note: The flags_darwin field was introduced before the official flags
+	 * field. Until the macOS backends support a new ABI version we need to
+	 * copy flags.
+	 */
+	arg->attr.flags_darwin = arg->attr.flags;
 }
 
 #endif
@@ -707,6 +706,13 @@ int fuse_reply_attr$DARWIN(fuse_req_t req, const struct fuse_darwin_attr *attr,
 	arg.attr_valid = calc_timeout_sec(attr_timeout);
 	arg.attr_valid_nsec = calc_timeout_nsec(attr_timeout);
 	convert_attr_out$DARWIN(attr, &arg.attr);
+
+	/*
+	 * Note: The flags_darwin field was introduced before the official flags
+	 * field. Until the macOS backends support a new ABI version we need to
+	 * copy flags.
+	 */
+	arg.attr.flags_darwin = arg.attr.flags;
 
 	return send_reply_ok(req, &arg, size);
 }
@@ -1476,6 +1482,8 @@ static void do_setattr(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	 * FATTR_DARWIN_CTIME to FATTR_CTIME.
 	 */
 	if (arg->valid & FATTR_DARWIN_CTIME) {
+		arg->ctime = arg->ctime_darwin;
+		arg->ctimensec = arg->ctimensec_darwin;
 		arg->valid |= FATTR_CTIME;
 	}
 
