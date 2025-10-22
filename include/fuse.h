@@ -943,7 +943,7 @@ FUSE_DARWIN_EXTEND_OPERATION(
 	 * Set file flags
 	 */
 	int (*chflags) (const char *, struct fuse_file_info *,
-			unsigned int flags);
+			unsigned int);
 
 	/**
 	 * Rename the mounted volume
@@ -953,7 +953,18 @@ FUSE_DARWIN_EXTEND_OPERATION(
 	 * will fail with the same error code without being send to the
 	 * filesystem process.
 	 */
-	int (*setvolname) (const char *name);
+	int (*setvolname) (const char *);
+
+	/**
+	 * Indicate to a filesystem that the number of watchers of a file has
+	 * changed.
+	 *
+	 * FUSE_MONITOR_BEGIN is passed when a new watcher of a file is
+	 * registered. FUSE_MONITOR_END is passed when a watcher stops
+	 * watching a file. Each FUSE_MONITOR_BEGIN will be matched by a
+	 * FUSE_MONITOR_END.
+	 */
+	void (*monitor) (const char *, uint32_t);
 #endif
 };
 
@@ -1515,6 +1526,8 @@ int fuse_fs_chflags(struct fuse_fs *fs, const char *path,
 	DARWIN_SYMBOL(fuse_fs_chflags);
 int fuse_fs_setvolname(struct fuse_fs *fs, const char *name)
 	DARWIN_SYMBOL(fuse_fs_setvolname);
+void fuse_fs_monitor(struct fuse_fs *fs, const char *path, uint32_t flags)
+	DARWIN_SYMBOL(fuse_fs_monitor);
 #endif
 void fuse_fs_init(struct fuse_fs *fs, struct fuse_conn_info *conn,
 		struct fuse_config *cfg);

@@ -642,6 +642,15 @@ static int volicon_setvolname(const char *name)
 	return fuse_fs_setvolname(volicon_get()->next, name);
 }
 
+static void volicon_monitor(const char *path, uint32_t flags)
+{
+	if (volicon_is_a_magic_file(path)) {
+		return;
+	}
+
+	fuse_fs_monitor(volicon_get()->next, path, flags);
+}
+
 static void *volicon_init(struct fuse_conn_info *conn,
 			  struct fuse_config *cfg)
 {
@@ -714,6 +723,7 @@ static const struct fuse_operations volicon_oper = {
 #ifdef __APPLE__
 	.chflags	= volicon_chflags,
 	.setvolname	= volicon_setvolname,
+	.monitor	= volicon_monitor,
 #endif
 };
 

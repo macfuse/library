@@ -700,6 +700,17 @@ static int subdir_setvolname(const char *name)
 	return fuse_fs_setvolname(subdir_get()->next, name);
 }
 
+static void subdir_monitor(const char *path, uint32_t flags)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		fuse_fs_monitor(d->next, newpath, flags);
+		free(newpath);
+	}
+}
+
 #endif
 
 static void *subdir_init(struct fuse_conn_info *conn,
@@ -773,6 +784,7 @@ static const struct fuse_operations subdir_oper = {
 #ifdef __APPLE__
 	.chflags	= subdir_chflags,
 	.setvolname	= subdir_setvolname,
+	.monitor	= subdir_monitor,
 #endif
 };
 

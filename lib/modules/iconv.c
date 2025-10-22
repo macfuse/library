@@ -757,6 +757,17 @@ static int iconv_setvolname(const char *name)
 	return err;
 }
 
+static void iconv_monitor(const char *path, uint32_t flags)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		fuse_fs_monitor(ic->next, newpath, flags);
+		free(newpath);
+	}
+}
+
 #endif
 
 static void *iconv_init(struct fuse_conn_info *conn,
@@ -834,6 +845,7 @@ static const struct fuse_operations iconv_oper = {
 #ifdef __APPLE__
 	.chflags	= iconv_chflags,
 	.setvolname	= iconv_setvolname,
+	.monitor	= iconv_monitor,
 #endif
 };
 

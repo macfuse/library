@@ -484,6 +484,13 @@ static int threadid_setvolname(const char *name)
 	return res;
 }
 
+static void threadid_monitor(const char *path, uint32_t flags)
+{
+	THREADID_PRE
+	fuse_fs_monitor(threadid_get()->next, path, flags);
+	THREADID_POST
+}
+
 static void *threadid_init(struct fuse_conn_info *conn,
 			   struct fuse_config *cfg)
 {
@@ -554,6 +561,7 @@ static const struct fuse_operations threadid_oper = {
 #ifdef __APPLE__
 	.chflags	= threadid_chflags,
 	.setvolname	= threadid_setvolname,
+	.monitor	= threadid_monitor,
 #endif
 };
 

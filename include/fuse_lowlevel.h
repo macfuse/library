@@ -1422,6 +1422,24 @@ struct fuse_lowlevel_ops {
 	 * @param name new volume name
 	 */
 	void (*setvolname) (fuse_req_t req, const char *name);
+
+	/**
+	 * Indicate to a filesystem that the number of watchers of a file has
+	 * changed.
+	 *
+	 * FUSE_MONITOR_BEGIN is passed when a new watcher of a file is
+	 * registered. FUSE_MONITOR_END is passed when a watcher stops
+	 * watching a file. Each FUSE_MONITOR_BEGIN will be matched by a
+	 * FUSE_MONITOR_END.
+	 *
+	 * Valid replies:
+	 *   fuse_reply_none
+	 *
+	 * @param req request handle watch state has changed
+	 * @param ino the inode number
+	 * @param flags the monitor flags
+	 */
+	void (*monitor) (fuse_req_t req, fuse_ino_t ino, uint32_t flags);
 #endif
 };
 

@@ -2554,7 +2554,7 @@ int fuse_fs_setxattr$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.setxattr.darwin) {
 		if (fs->debug)
 			fuse_log(FUSE_LOG_DEBUG,
-				 "setxattr (Darwin) %s %s %lu 0x%x %du\n",
+				 "setxattr (Darwin) %s %s %lu 0x%x %u\n",
 				 path, name, (unsigned long) size, flags,
 				 position);
 
@@ -2609,7 +2609,7 @@ int fuse_fs_getxattr$DARWIN(struct fuse_fs *fs, const char *path,
 	if (fs->op.getxattr.darwin) {
 		if (fs->debug)
 			fuse_log(FUSE_LOG_DEBUG,
-				 "getxattr (Darwin) %s %s %lu %du\n",
+				 "getxattr (Darwin) %s %s %lu %u\n",
 				 path, name, (unsigned long) size,
 				 position);
 
@@ -2804,7 +2804,7 @@ int fuse_fs_chflags$DARWIN(struct fuse_fs *fs, const char *path,
 		if (fs->debug) {
 			char buf[10];
 			fuse_log(FUSE_LOG_DEBUG,
-				 "chflags[%s] (Darwin) %s %du\n",
+				 "chflags[%s] (Darwin) %s %u\n",
 				 file_info_string(fi, buf, sizeof(buf)), path,
 				 flags);
 		}
@@ -2819,11 +2819,24 @@ int fuse_fs_setvolname$DARWIN(struct fuse_fs *fs, const char *name)
 	fuse_get_context()->private_data = fs->user_data;
 	if (fs->op.setvolname) {
 		if (fs->debug)
-			fuse_log(FUSE_LOG_DEBUG, "setvolname (Darwin) %s\n");
+			fuse_log(FUSE_LOG_DEBUG, "setvolname (Darwin) %s\n",
+				 name);
 
 		return fs->op.setvolname(name);
 	} else {
 		return -ENOSYS;
+	}
+}
+
+void fuse_fs_monitor$DARWIN(struct fuse_fs *fs, const char *path, uint32_t flags)
+{
+	fuse_get_context()->private_data = fs->user_data;
+	if (fs->op.monitor) {
+		if (fs->debug)
+			fuse_log(FUSE_LOG_DEBUG, "monitor (Darwin) %s %u\n",
+				 path, flags);
+
+		fs->op.monitor(path, flags);
 	}
 }
 
@@ -5805,14 +5818,27 @@ static void fuse_lib_lseek(fuse_req_t req, fuse_ino_t ino, off_t off, int whence
 static void fuse_lib_setvolname(fuse_req_t req, const char *name)
 {
 	struct fuse *f = req_fuse_prepare(req);
-	struct fuse_intr_data d;
 	int err;
 
-	fuse_prepare_interrupt(f, req, &d);
 	err = fuse_fs_setvolname(f->fs, name);
-	fuse_finish_interrupt(f, req, &d);
 
 	reply_err(req, err);
+}
+
+static void fuse_lib_monitor(fuse_req_t req, fuse_ino_t ino, uint32_t flags)
+{
+	struct fuse *f = req_fuse_prepare(req);
+	char *path;
+	int err;
+
+	err = get_path(f, ino, &path);
+	if (err) {
+		fuse_reply_none(req);
+		return;
+	}
+
+	fuse_fs_monitor(f->fs, path, flags);
+	fuse_reply_none(req);
 }
 
 #endif
@@ -5929,6 +5955,7 @@ static struct fuse_lowlevel_ops fuse_path_ops = {
 	.lseek = fuse_lib_lseek,
 #ifdef __APPLE__
 	.setvolname = fuse_lib_setvolname,
+	.monitor = fuse_lib_monitor,
 #endif
 };
 

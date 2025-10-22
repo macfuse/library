@@ -2405,6 +2405,16 @@ static void do_lseek(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 
 #ifdef __APPLE__
 
+static void do_monitor(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	struct fuse_monitor_in *arg = (struct fuse_monitor_in *) inarg;
+
+	if (req->se->op.monitor)
+		req->se->op.monitor(req, nodeid, arg->flags);
+	else
+		fuse_reply_none(req);
+}
+
 static void do_setvolname(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 {
 	(void)nodeid;
@@ -3328,6 +3338,7 @@ static struct {
 	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_LSEEK]	   = { do_lseek,       "LSEEK"	     },
 #ifdef __APPLE__
+	[FUSE_MONITOR]     = { do_monitor,     "MONITOR"     },
 	[FUSE_SETVOLNAME]  = { do_setvolname,  "SETVOLNAME"  },
 #endif
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },

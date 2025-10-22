@@ -680,9 +680,10 @@ enum fuse_opcode {
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
 #ifdef __APPLE__
-	FUSE_SETVOLNAME    = 61,
-	FUSE_GETXTIMES     = 62,
-	FUSE_EXCHANGE      = 63,
+	FUSE_MONITOR		= 60,
+	FUSE_SETVOLNAME   	= 61,
+	FUSE_GETXTIMES   	= 62,
+	FUSE_EXCHANGE     	= 63,
 #endif
 
 	/* CUSE specific operations */
@@ -1122,6 +1123,15 @@ struct fuse_direntplus {
 	offsetof(struct fuse_direntplus, dirent.name)
 #define FUSE_DIRENTPLUS_SIZE(d) \
 	FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS + (d)->dirent.namelen)
+
+#ifdef __APPLE__
+
+struct fuse_monitor_in {
+	uint32_t 	flags;
+	uint32_t	padding;
+};
+
+#endif
 
 struct fuse_notify_inval_inode_out {
 	uint64_t	ino;

@@ -46,6 +46,8 @@
 #define FUSE_DARWIN_OVERLOAD_OPERATIONS 0
 #endif
 
+#define DARWIN_SYMBOL(name) __asm("_" #name "$DARWIN")
+
 #ifndef RENAME_SWAP
 #define RENAME_SWAP 0x00000002
 #endif
@@ -55,8 +57,6 @@
 
 #define RENAME_EXCHANGE RENAME_SWAP
 #define RENAME_NOREPLACE RENAME_EXCL
-
-#define DARWIN_SYMBOL(name) __asm("_" #name "$DARWIN")
 
 #endif
 
@@ -595,6 +595,20 @@ struct fuse_loop_config_v1 {
 #define FUSE_IOCTL_DIR		(1 << 4)
 
 #define FUSE_IOCTL_MAX_IOV	256
+
+#ifdef __APPLE__
+
+/**
+ * Monitor flags
+ *
+ * FUSE_MONITOR_BEGIN: Begin monitoring file or directory for events
+ * FUSE_MONITOR_END: End monitoring file or directory for events
+ */
+
+#define FUSE_MONITOR_BEGIN	(1 << 0)
+#define FUSE_MONITOR_END	(1 << 1)
+
+#endif
 
 /**
  * Connection information, passed to the ->init() method
