@@ -8,6 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
+ * Copyright (c) 2025 Benjamin Fleischer
  */
 
 #define FUSE_USE_VERSION 26
@@ -770,6 +771,21 @@ static int iconv_fallocate(const char *path, int mode, off_t offset,
 	return err;
 }
 
+#ifdef __APPLE__
+
+static void iconv_monitor(const char *path, uint32_t flags)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		fuse_fs_monitor(ic->next, newpath, flags);
+		free(newpath);
+	}
+}
+
+#endif /* __APPLE__ */
+
 static void *iconv_init(struct fuse_conn_info *conn)
 {
 	struct iconv *ic = iconv_get();
@@ -829,6 +845,7 @@ static const struct fuse_operations iconv_oper = {
 	.bmap		= iconv_bmap,
 	.fallocate	= iconv_fallocate,
 #ifdef __APPLE__
+	.monitor	= iconv_monitor,
 	.renamex	= iconv_renamex,
 	.statfs_x	= iconv_statfs_x,
 	.setvolname	= iconv_setvolname,

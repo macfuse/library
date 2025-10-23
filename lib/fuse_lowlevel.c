@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2023 Benjamin Fleischer
+ * Copyright (c) 2011-2025 Benjamin Fleischer
  */
 
 #define _GNU_SOURCE
@@ -1324,9 +1324,19 @@ static void do_rename(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 
 #ifdef __APPLE__
 
+static void do_monitor(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	struct fuse_monitor_in *arg = (struct fuse_monitor_in *) inarg;
+
+	if (req->f->op.monitor)
+		req->f->op.monitor(req, nodeid, arg->flags);
+	else
+		fuse_reply_none(req);
+}
+
 static void do_setvolname(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 {
-	const char *volname = (const char *)inarg;
+	const char *volname = (const char *) inarg;
 	if (req->f->op.setvolname)
 		req->f->op.setvolname(req, volname);
 	else
@@ -2541,6 +2551,7 @@ static struct {
 	[FUSE_NOTIFY_REPLY] = { (void *) 1,    "NOTIFY_REPLY" },
 	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
 #ifdef __APPLE__
+	[FUSE_MONITOR]	   = { do_monitor,     "MONITOR"     },
 	[FUSE_SETVOLNAME]  = { do_setvolname,  "SETVOLNAME"  },
 	[FUSE_EXCHANGE]    = { do_exchange,    "EXCHANGE"    },
 	[FUSE_GETXTIMES]   = { do_getxtimes,   "GETXTIMES"   },

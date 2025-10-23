@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2024 Benjamin Fleischer
+ * Copyright (c) 2011-2025 Benjamin Fleischer
  */
 
 #include "config.h"
@@ -1953,6 +1953,17 @@ int fuse_fs_rename(struct fuse_fs *fs, const char *oldpath,
 
 #ifdef __APPLE__
 
+void fuse_fs_monitor(struct fuse_fs *fs, const char *path, uint32_t flags)
+{
+	fuse_get_context()->private_data = fs->user_data;
+	if (fs->op.monitor) {
+		if (fs->debug)
+			fprintf(stderr, "monitor %s %u\n", path, flags);
+
+		fs->op.monitor(path, flags);
+	}
+}
+
 int fuse_fs_renamex(struct fuse_fs *fs, const char *oldpath,
 		    const char *newpath, unsigned int flags)
 {
@@ -3698,6 +3709,22 @@ static void fuse_lib_rename(fuse_req_t req, fuse_ino_t olddir,
 
 #ifdef __APPLE__
 
+static void fuse_lib_monitor(fuse_req_t req, fuse_ino_t ino, uint32_t flags)
+{
+	struct fuse *f = req_fuse_prepare(req);
+	char *path;
+	int err;
+
+	err = get_path(f, ino, &path);
+	if (err) {
+		fuse_reply_none(req);
+		return;
+	}
+
+	fuse_fs_monitor(f->fs, path, flags);
+	fuse_reply_none(req);
+}
+
 #ifndef RENAME_SWAP
 #  define RENAME_SWAP 0x00000002
 #endif
@@ -5022,6 +5049,7 @@ static struct fuse_lowlevel_ops fuse_path_ops = {
 	.poll = fuse_lib_poll,
 	.fallocate = fuse_lib_fallocate,
 #ifdef __APPLE__
+	.monitor = fuse_lib_monitor,
 	.renamex = fuse_lib_renamex,
 	.setvolname = fuse_lib_setvolname,
 	.exchange = fuse_lib_exchange,

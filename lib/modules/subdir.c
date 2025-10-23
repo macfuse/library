@@ -8,6 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
+ * Copyright (c) 2025 Benjamin Fleischer
  */
 
 #define FUSE_USE_VERSION 26
@@ -754,6 +755,21 @@ static int subdir_fallocate(const char *path, int mode, off_t offset,
 	return err;
 }
 
+#ifdef __APPLE__
+
+static void subdir_monitor(const char *path, uint32_t flags)
+{
+	struct subdir *d = subdir_get();
+	char *newpath;
+	int err = subdir_addpath(d, path, &newpath);
+	if (!err) {
+		fuse_fs_monitor(d->next, newpath, flags);
+		free(newpath);
+	}
+}
+
+#endif /* __APPLE__ */
+
 static void *subdir_init(struct fuse_conn_info *conn)
 {
 	struct subdir *d = subdir_get();
@@ -809,6 +825,7 @@ static const struct fuse_operations subdir_oper = {
 	.bmap		= subdir_bmap,
 	.fallocate	= subdir_fallocate,
 #ifdef __APPLE__
+	.monitor	= subdir_monitor,
 	.renamex	= subdir_renamex,
 	.statfs_x	= subdir_statfs_x,
 	.setvolname	= subdir_setvolname,

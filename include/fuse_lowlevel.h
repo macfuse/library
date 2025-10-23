@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2017 Benjamin Fleischer
+ * Copyright (c) 2011-2025 Benjamin Fleischer
  */
 
 #ifndef _FUSE_LOWLEVEL_H_
@@ -1053,18 +1053,35 @@ struct fuse_lowlevel_ops {
 	 *             see fallocate(2)
 	 */
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
-		       off_t offset, off_t length, struct fuse_file_info *fi);
+			   off_t offset, off_t length,
+			   struct fuse_file_info *fi);
 
 #ifdef __APPLE__
-
 	void (*reserved00) (fuse_req_t req, fuse_ino_t ino,
 			    void *, void *, void *, void *, void *, void *);
 	void (*reserved01) (fuse_req_t req, fuse_ino_t ino,
 			    void *, void *, void *, void *, void *, void *);
-	void (*reserved02) (fuse_req_t req, fuse_ino_t ino,
-			    void *, void *, void *, void *, void *, void *);
 
-	/** Rename a file
+	/**
+	 * Indicate to a filesystem that the number of watchers of a file has
+	 * changed.
+	 *
+	 * FUSE_MONITOR_BEGIN is passed when a new watcher of a file is
+	 * registered. FUSE_MONITOR_END is passed when a watcher stops
+	 * watching a file. Each FUSE_MONITOR_BEGIN will be matched by a
+	 * FUSE_MONITOR_END.
+	 *
+	 * Valid replies:
+	 *   fuse_reply_none
+	 *
+	 * @param req request handle watch state has changed
+	 * @param ino the inode number
+	 * @param flags the monitor flags
+	 */
+	void (*monitor) (fuse_req_t req, fuse_ino_t ino, uint32_t flags);
+
+	/**
+	 * Rename a file
 	 *
 	 * If the target exists it should be atomically replaced. If
 	 * the target's inode's lookup count is non-zero, the file

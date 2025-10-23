@@ -344,6 +344,7 @@ enum fuse_opcode {
 	FUSE_BATCH_FORGET  = 42,
 	FUSE_FALLOCATE     = 43,
 #ifdef __APPLE__
+	FUSE_MONITOR	   = 60,
 	FUSE_SETVOLNAME    = 61,
 	FUSE_GETXTIMES     = 62,
 	FUSE_EXCHANGE      = 63,
@@ -728,6 +729,15 @@ struct fuse_dirent {
 #define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 #define FUSE_DIRENT_SIZE(d) \
 	FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET + (d)->namelen)
+
+#ifdef __APPLE__
+
+struct fuse_monitor_in {
+	uint32_t 	flags;
+	uint32_t	padding;
+};
+
+#endif
 
 struct fuse_notify_inval_inode_out {
 	__u64	ino;

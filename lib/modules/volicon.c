@@ -13,7 +13,7 @@
  */
 
 /*
- * Copyright (c) 2012-2024 Benjamin Fleischer
+ * Copyright (c) 2012-2025 Benjamin Fleischer
  */
 
 #define FUSE_USE_VERSION 26
@@ -662,6 +662,15 @@ static int volicon_fallocate(const char *path, int mode, off_t offset,
 				 length, fi);
 }
 
+static void volicon_monitor(const char *path, uint32_t flags)
+{
+	if (volicon_is_icon_magic_file(path)) {
+		return;
+	}
+
+	fuse_fs_monitor(volicon_get()->next, path, flags);
+}
+
 /*
  * Listed in the same order as in struct fuse_operations in <fuse.h>
  */
@@ -674,7 +683,6 @@ static struct fuse_operations volicon_oper = {
 	.rmdir       = volicon_rmdir,
 	.symlink     = volicon_symlink,
 	.rename      = volicon_rename,
-	.renamex     = volicon_renamex,
 	.link        = volicon_link,
 	.chmod       = volicon_chmod,
 	.chown       = volicon_chown,
@@ -704,6 +712,8 @@ static struct fuse_operations volicon_oper = {
 	.utimens     = volicon_utimens,
 	.bmap        = volicon_bmap,
 	.fallocate   = volicon_fallocate,
+	.monitor     = volicon_monitor,
+	.renamex     = volicon_renamex,
 	.statfs_x    = volicon_statfs_x,
 	.setvolname  = volicon_setvolname,
 	.exchange    = volicon_exchange,

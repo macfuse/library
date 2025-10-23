@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2012 Benjamin Fleischer
+ * Copyright (c) 2011-2025 Benjamin Fleischer
  */
 
 #ifndef _FUSE_H_
@@ -612,8 +612,17 @@ struct fuse_operations {
 #ifdef __APPLE__
 	int (*reserved00)(void *, void *, void *, void *, void *, void *,
 			  void *, void *);
-	int (*reserved01)(void *, void *, void *, void *, void *, void *,
-			  void *, void *);
+
+	/**
+	 * Indicate to a filesystem that the number of watchers of a file has
+	 * changed.
+	 *
+	 * FUSE_MONITOR_BEGIN is passed when a new watcher of a file is
+	 * registered. FUSE_MONITOR_END is passed when a watcher stops
+	 * watching a file. Each FUSE_MONITOR_BEGIN will be matched by a
+	 * FUSE_MONITOR_END.
+	 */
+	void (*monitor)(const char *, uint32_t);
 
 	/** Rename a file */
 	int (*renamex) (const char *, const char *, unsigned int);
@@ -903,6 +912,7 @@ int fuse_fs_fgetattr(struct fuse_fs *fs, const char *path, struct stat *buf,
 int fuse_fs_rename(struct fuse_fs *fs, const char *oldpath,
 		   const char *newpath);
 #ifdef __APPLE__
+void fuse_fs_monitor(struct fuse_fs *fs, const char *path, uint32_t flags);
 int fuse_fs_renamex(struct fuse_fs *fs, const char *oldpath,
 		    const char *newpath, unsigned int flags);
 int fuse_fs_setvolname(struct fuse_fs *fs, const char *volname);

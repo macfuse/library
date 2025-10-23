@@ -7,7 +7,7 @@
 */
 
 /*
- * Copyright (c) 2012-2024 Benjamin Fleischer
+ * Copyright (c) 2012-2025 Benjamin Fleischer
  */
 
 #define FUSE_USE_VERSION 26
@@ -520,6 +520,13 @@ static int threadid_fallocate(const char *path, int mode, off_t offset,
 	return res;
 }
 
+static void threadid_monitor(const char *path, uint32_t flags)
+{
+	THREADID_PRE
+	fuse_fs_monitor(threadid_get()->next, path, flags);
+	THREADID_POST
+}
+
 /*
  * Listed in the same order as in struct fuse_operations in <fuse.h>
  */
@@ -532,7 +539,6 @@ static struct fuse_operations threadid_oper = {
 	.rmdir       = threadid_rmdir,
 	.symlink     = threadid_symlink,
 	.rename      = threadid_rename,
-	.renamex     = threadid_renamex,
 	.link        = threadid_link,
 	.chmod       = threadid_chmod,
 	.chown       = threadid_chown,
@@ -562,6 +568,8 @@ static struct fuse_operations threadid_oper = {
 	.utimens     = threadid_utimens,
 	.bmap        = threadid_bmap,
 	.fallocate   = threadid_fallocate,
+	.monitor     = threadid_monitor,
+	.renamex     = threadid_renamex,
 	.statfs_x    = threadid_statfs_x,
 	.setvolname  = threadid_setvolname,
 	.exchange    = threadid_exchange,
