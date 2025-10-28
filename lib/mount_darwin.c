@@ -444,6 +444,9 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 			setenv("_FUSE_COMMVERS", "2", 1);
 
 			argv[a++] = mount_prog_path;
+			if (mo->backend && strcmp(mo->backend, "fskit") == 0) {
+				argv[a++] = "mount";
+			}
 			if (mo->kernel_opts) {
 				argv[a++] = "-o";
 				argv[a++] = mo->kernel_opts;
