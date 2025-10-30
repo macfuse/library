@@ -321,6 +321,8 @@ static int receive_fd(int sock_fd)
 	}
 
 	cmsg = CMSG_FIRSTHDR(&msg);
+	if (!cmsg)
+		return -1;
 	if (cmsg->cmsg_type != SCM_RIGHTS) {
 		fprintf(stderr, "fuse: received message of unknown type %d\n",
 			cmsg->cmsg_type);
