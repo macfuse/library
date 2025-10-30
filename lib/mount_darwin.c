@@ -296,6 +296,8 @@ static int receive_fd(int sock_fd)
 	}
 
 	cmsg = CMSG_FIRSTHDR(&msg);
+	if (!cmsg)
+		return -1;
 	if (cmsg->cmsg_type != SCM_RIGHTS) {
 		fuse_log(FUSE_LOG_ERR,
 			 "fuse: received message of unknown type %d\n",
