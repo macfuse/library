@@ -918,7 +918,11 @@ struct fuse_fsync_in {
 	uint32_t	padding;
 };
 
+#ifdef __APPLE__
+#define FUSE_COMPAT_SETXATTR_IN_SIZE 16
+#else
 #define FUSE_COMPAT_SETXATTR_IN_SIZE 8
+#endif
 
 struct fuse_setxattr_in {
 	uint32_t	size;
