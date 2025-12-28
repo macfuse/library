@@ -1,5 +1,7 @@
 /*  FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh / Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt.
@@ -27,8 +29,60 @@
 #include <sys/types.h>
 #include <assert.h>
 
+#ifdef __APPLE__
+#include <stdio.h>
+#include <sys/time.h>
+#endif
+
 #define FUSE_MAKE_VERSION(maj, min)  ((maj) * 100 + (min))
 #define FUSE_VERSION FUSE_MAKE_VERSION(FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION)
+
+#ifdef __APPLE__
+#ifndef FUSE_DARWIN_ENABLE_EXTENSIONS
+#define FUSE_DARWIN_ENABLE_EXTENSIONS 1
+#endif
+#ifndef FUSE_DARWIN_OVERLOAD_OPERATIONS
+#define FUSE_DARWIN_OVERLOAD_OPERATIONS 0
+#endif
+
+#define DARWIN_SYMBOL(name) __asm("_" #name "$DARWIN")
+
+#ifndef RENAME_SWAP
+#define RENAME_SWAP 0x00000002
+#endif
+#ifndef RENAME_EXCL
+#define RENAME_EXCL 0x00000004
+#endif
+
+#define RENAME_EXCHANGE RENAME_SWAP
+#define RENAME_NOREPLACE RENAME_EXCL
+#endif
+
+#if defined(__APPLE__) && FUSE_DARWIN_ENABLE_EXTENSIONS
+#define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
+	__typeof__(darwin) name DARWIN_SYMBOL(name);
+#elif defined(__APPLE__)
+#define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
+	__typeof__(vanilla) name; \
+	__typeof__(darwin) name ## $DARWIN;
+#else
+#define FUSE_DARWIN_EXTEND_FUNCTION(name, vanilla, darwin) \
+	__typeof__(vanilla) name;
+#endif
+
+#if defined(__APPLE__) && FUSE_DARWIN_ENABLE_EXTENSIONS
+#define FUSE_DARWIN_EXTEND_OPERATION(name, vanilla, darwin) \
+	__typeof__(darwin) name;
+#elif defined(__APPLE__) && FUSE_DARWIN_OVERLOAD_OPERATIONS
+#define FUSE_DARWIN_EXTEND_OPERATION(name, _vanilla, _darwin) \
+	union { \
+		__typeof__(_vanilla) vanilla; \
+		__typeof__(_darwin) darwin; \
+	} name;
+#else
+#define FUSE_DARWIN_EXTEND_OPERATION(name, vanilla, darwin) \
+	__typeof__(vanilla) name;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -512,6 +566,15 @@ struct fuse_loop_config_v1 {
  */
 #define FUSE_CAP_OVER_IO_URING (1UL << 31)
 
+#ifdef __APPLE__
+#define FUSE_DARWIN_CAP_THREAD_SAFE (1 << 0)
+#define FUSE_DARWIN_CAP_CASE_INSENSITIVE (1 << 1)
+#define FUSE_DARWIN_CAP_ACCESS_EXT (1 << 2)
+#define FUSE_DARWIN_CAP_RENAME_EXT (1 << 3)
+#define FUSE_DARWIN_CAP_FALLOCATE (1 << 4)
+#define FUSE_DARWIN_CAP_SETVOLNAME (1 << 5)
+#endif
+
 /**
  * Ioctl flags
  *
@@ -528,6 +591,18 @@ struct fuse_loop_config_v1 {
 #define FUSE_IOCTL_DIR		(1 << 4)
 
 #define FUSE_IOCTL_MAX_IOV	256
+
+#ifdef __APPLE__
+/**
+ * Monitor flags
+ *
+ * FUSE_MONITOR_BEGIN: Begin monitoring file or directory for events
+ * FUSE_MONITOR_END: End monitoring file or directory for events
+ */
+
+#define FUSE_MONITOR_BEGIN	(1 << 0)
+#define FUSE_MONITOR_END	(1 << 1)
+#endif
 
 /**
  * Connection information, passed to the ->init() method
@@ -700,6 +775,21 @@ struct fuse_conn_info {
 	 */
 	uint64_t want_ext;
 
+#ifdef __APPLE__
+	/**
+	 * Darwin capability flags that the kernel supports (read-only)
+	 */
+	uint64_t capable_darwin;
+
+	/**
+	 * Darwin capability flags that the filesystem wants to enable.
+	 *
+	 * Don't set this field directly, but use the helper functions
+	 * fuse_darwin_set_feature_flag() / fuse_darwin_unset_feature_flag()
+	 */
+	uint64_t want_darwin;
+#endif
+
 	/**
 	 * Request timeout (in seconds). If the request is not answered by
 	 * this timeout, the connection will be aborted by the kernel.
@@ -798,6 +888,31 @@ const char *fuse_pkgversion(void);
  * @param ph the poll handle
  */
 void fuse_pollhandle_destroy(struct fuse_pollhandle *ph);
+
+/* ----------------------------------------------------------- *
+ * Darwin file attributes				       *
+ * ----------------------------------------------------------- */
+
+#ifdef __APPLE__
+struct fuse_darwin_attr {
+	ino_t ino;
+	mode_t mode;
+	nlink_t nlink;
+	uid_t uid;
+	gid_t gid;
+	dev_t rdev;
+	struct timespec atimespec;
+	struct timespec mtimespec;
+	struct timespec ctimespec;
+	struct timespec btimespec;
+	struct timespec bkuptimespec;
+	off_t size;
+	blkcnt_t blocks;
+	blksize_t blksize;
+	unsigned int flags;
+	uint64_t reserved[8];
+};
+#endif
 
 /* ----------------------------------------------------------- *
  * Data buffer						       *
@@ -962,7 +1077,12 @@ struct libfuse_version
 	uint32_t major;
 	uint32_t minor;
 	uint32_t hotfix;
+#ifdef __APPLE__
+	uint32_t darwin_extensions_enabled : 1;
+	uint32_t padding : 31;
+#else
 	uint32_t padding;
+#endif
 };
 
 /* Initialize bufvec with a single buffer of given size */
@@ -1130,7 +1250,13 @@ bool fuse_get_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
  */
 int fuse_convert_to_conn_want_ext(struct fuse_conn_info *conn);
 
+#ifdef __APPLE__
+bool fuse_darwin_set_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
 
+void fuse_darwin_unset_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
+
+bool fuse_darwin_get_feature_flag(struct fuse_conn_info *conn, uint64_t flag);
+#endif
 
 /* ----------------------------------------------------------- *
  * Compatibility stuff					       *

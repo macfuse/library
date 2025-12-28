@@ -673,7 +673,11 @@ static int fuse_uring_queue_handle_cqes(struct fuse_ring_queue *queue)
 
 			switch (err) {
 			case -EAGAIN:
+#ifdef __APPLE__
+				__attribute__((fallthrough))
+#else
 				fallthrough;
+#endif
 			case -EINTR:
 				ent = io_uring_cqe_get_data(cqe);
 				fuse_uring_resubmit(queue, ent);

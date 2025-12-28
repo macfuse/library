@@ -1,12 +1,18 @@
 /*
   fuse iconv module: file name charset conversion
   Copyright (C) 2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2006-2008  Amit Singh / Google Inc.
+  Copyright (C) 2011-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt
 */
 
 #include <fuse_config.h>
+
+#ifdef __APPLE__
+#define FUSE_DARWIN_OVERLOAD_OPERATIONS 1
+#endif
 
 #include <fuse.h>
 #include <stdio.h>
@@ -31,7 +37,14 @@ struct iconv {
 struct iconv_dh {
 	struct iconv *ic;
 	void *prev_buf;
+#ifdef __APPLE__
+	union {
+		fuse_fill_dir_t vanilla;
+		fuse_darwin_fill_dir_t darwin;
+	} prev_filler;
+#else
 	fuse_fill_dir_t prev_filler;
+#endif
 };
 
 static struct iconv *iconv_get(void)
@@ -113,6 +126,34 @@ static int iconv_getattr(const char *path, struct stat *stbuf,
 	return err;
 }
 
+#ifdef __APPLE__
+static int iconv_getattr$DARWIN(const char *path, struct fuse_darwin_attr *attr,
+				struct fuse_file_info *fi)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_getattr$DARWIN(ic->next, newpath, attr, fi);
+		free(newpath);
+	}
+	return err;
+}
+
+static int iconv_setattr(const char *path, struct fuse_darwin_attr *attr,
+			 int to_set, struct fuse_file_info *fi)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_setattr(ic->next, newpath, attr, to_set, fi);
+		free(newpath);
+	}
+	return err;
+}
+#endif
+
 static int iconv_access(const char *path, int mask)
 {
 	struct iconv *ic = iconv_get();
@@ -166,7 +207,12 @@ static int iconv_dir_fill(void *buf, const char *name,
 	char *newname;
 	int res = 0;
 	if (iconv_convpath(dh->ic, name, &newname, 1) == 0) {
+#ifdef __APPLE__
+		res = dh->prev_filler.vanilla(dh->prev_buf, newname, stbuf, off,
+					      flags);
+#else
 		res = dh->prev_filler(dh->prev_buf, newname, stbuf, off, flags);
+#endif
 		free(newname);
 	}
 	return res;
@@ -183,13 +229,55 @@ static int iconv_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		struct iconv_dh dh;
 		dh.ic = ic;
 		dh.prev_buf = buf;
+#ifdef __APPLE__
+		dh.prev_filler.vanilla = filler;
+#else
 		dh.prev_filler = filler;
+#endif
 		err = fuse_fs_readdir(ic->next, newpath, &dh, iconv_dir_fill,
 				      offset, fi, flags);
 		free(newpath);
 	}
 	return err;
 }
+
+#ifdef __APPLE__
+static int iconv_dir_fill$DARWIN(void *buf, const char *name,
+				 const struct fuse_darwin_attr *attr,
+				 off_t off, enum fuse_fill_dir_flags flags)
+{
+	struct iconv_dh *dh = buf;
+	char *newname;
+	int res = 0;
+	if (iconv_convpath(dh->ic, name, &newname, 1) == 0) {
+		res = dh->prev_filler.darwin(dh->prev_buf, newname, attr, off,
+					     flags);
+		free(newname);
+	}
+	return res;
+}
+
+static int iconv_readdir$DARWIN(const char *path, void *buf,
+				fuse_darwin_fill_dir_t filler, off_t offset,
+				struct fuse_file_info *fi,
+				enum fuse_readdir_flags flags)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		struct iconv_dh dh;
+		dh.ic = ic;
+		dh.prev_buf = buf;
+		dh.prev_filler.darwin = filler;
+		err = fuse_fs_readdir$DARWIN(ic->next, newpath, &dh,
+					     iconv_dir_fill$DARWIN, offset, fi,
+					     flags);
+		free(newpath);
+	}
+	return err;
+}
+#endif
 
 static int iconv_releasedir(const char *path, struct fuse_file_info *fi)
 {
@@ -354,6 +442,21 @@ static int iconv_utimens(const char *path, const struct timespec ts[2],
 	return err;
 }
 
+#ifdef __APPLE__
+static int iconv_utimens$DARWIN(const char *path, const struct timespec ts[3],
+				struct fuse_file_info *fi)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_utimens$DARWIN(ic->next, newpath, ts, fi);
+		free(newpath);
+	}
+	return err;
+}
+#endif
+
 static int iconv_create(const char *path, mode_t mode,
 			struct fuse_file_info *fi)
 {
@@ -417,6 +520,20 @@ static int iconv_statfs(const char *path, struct statvfs *stbuf)
 	return err;
 }
 
+#ifdef __APPLE__
+static int iconv_statfs$DARWIN(const char *path, struct statfs *stbuf)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_statfs$DARWIN(ic->next, newpath, stbuf);
+		free(newpath);
+	}
+	return err;
+}
+#endif
+
 static int iconv_flush(const char *path, struct fuse_file_info *fi)
 {
 	struct iconv *ic = iconv_get();
@@ -476,10 +593,26 @@ static int iconv_setxattr(const char *path, const char *name,
 	if (!err) {
 		err = fuse_fs_setxattr(ic->next, newpath, name, value, size,
 				       flags);
+	}
+	return err;
+}
+
+#ifdef __APPLE__
+static int iconv_setxattr$DARWIN(const char *path, const char *name,
+				 const char *value, size_t size, int flags,
+				 unsigned int position)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_setxattr$DARWIN(ic->next, newpath, name, value,
+					      size, flags, position);
 		free(newpath);
 	}
 	return err;
 }
+#endif
 
 static int iconv_getxattr(const char *path, const char *name, char *value,
 			  size_t size)
@@ -493,6 +626,23 @@ static int iconv_getxattr(const char *path, const char *name, char *value,
 	}
 	return err;
 }
+
+#ifdef __APPLE__
+static int iconv_getxattr$DARWIN(const char *path, const char *name,
+				 char *value, size_t size,
+				 unsigned int position)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_getxattr$DARWIN(ic->next, newpath, name, value,
+					      size, position);
+		free(newpath);
+	}
+	return err;
+}
+#endif
 
 static int iconv_listxattr(const char *path, char *list, size_t size)
 {
@@ -568,6 +718,44 @@ static off_t iconv_lseek(const char *path, off_t off, int whence,
 	return res;
 }
 
+#ifdef __APPLE__
+static int iconv_chflags(const char *path, struct fuse_file_info *fi,
+			 unsigned int flags)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		err = fuse_fs_chflags(ic->next, newpath, fi, flags);
+		free(newpath);
+	}
+	return err;
+}
+
+static int iconv_setvolname(const char *name)
+{
+	struct iconv *ic = iconv_get();
+	char *newname;
+	int err = iconv_convpath(ic, name, &newname, 0);
+	if (!err) {
+		err = fuse_fs_setvolname(ic->next, newname);
+		free(newname);
+	}
+	return err;
+}
+
+static void iconv_monitor(const char *path, uint32_t flags)
+{
+	struct iconv *ic = iconv_get();
+	char *newpath;
+	int err = iconv_convpath(ic, path, &newpath, 0);
+	if (!err) {
+		fuse_fs_monitor(ic->next, newpath, flags);
+		free(newpath);
+	}
+}
+#endif
+
 #ifdef HAVE_STATX
 static int iconv_statx(const char *path, int flags, int mask, struct statx *stxbuf,
 			 struct fuse_file_info *fi)
@@ -609,11 +797,18 @@ static void iconv_destroy(void *data)
 static const struct fuse_operations iconv_oper = {
 	.destroy	= iconv_destroy,
 	.init		= iconv_init,
+#ifndef __APPLE__
 	.getattr	= iconv_getattr,
+#endif
+#ifdef __APPLE__
+	.setattr	= iconv_setattr,
+#endif
 	.access		= iconv_access,
 	.readlink	= iconv_readlink,
 	.opendir	= iconv_opendir,
+#ifndef __APPLE__
 	.readdir	= iconv_readdir,
+#endif
 	.releasedir	= iconv_releasedir,
 	.mknod		= iconv_mknod,
 	.mkdir		= iconv_mkdir,
@@ -625,24 +820,35 @@ static const struct fuse_operations iconv_oper = {
 	.chmod		= iconv_chmod,
 	.chown		= iconv_chown,
 	.truncate	= iconv_truncate,
+#ifndef __APPLE__
 	.utimens	= iconv_utimens,
+#endif
 	.create		= iconv_create,
 	.open		= iconv_open_file,
 	.read_buf	= iconv_read_buf,
 	.write_buf	= iconv_write_buf,
+#ifndef __APPLE__
 	.statfs		= iconv_statfs,
+#endif
 	.flush		= iconv_flush,
 	.release	= iconv_release,
 	.fsync		= iconv_fsync,
 	.fsyncdir	= iconv_fsyncdir,
+#ifndef __APPLE__
 	.setxattr	= iconv_setxattr,
 	.getxattr	= iconv_getxattr,
+#endif
 	.listxattr	= iconv_listxattr,
 	.removexattr	= iconv_removexattr,
 	.lock		= iconv_lock,
 	.flock		= iconv_flock,
 	.bmap		= iconv_bmap,
 	.lseek		= iconv_lseek,
+#ifdef __APPLE__
+	.chflags	= iconv_chflags,
+	.setvolname	= iconv_setvolname,
+	.monitor	= iconv_monitor,
+#endif
 #ifdef HAVE_STATX
 	.statx		= iconv_statx,
 #endif
@@ -733,7 +939,29 @@ static struct fuse_fs *iconv_new(struct fuse_args *args,
 	}
 
 	ic->next = next[0];
+#ifdef __APPLE__
+	{
+		struct fuse_operations oper = iconv_oper;
+		if (fuse_fs_darwin_extensions_enabled(next[0])) {
+			oper.getattr.darwin = iconv_getattr$DARWIN;
+			oper.readdir.darwin = iconv_readdir$DARWIN;
+			oper.utimens.darwin = iconv_utimens$DARWIN;
+			oper.statfs.darwin = iconv_statfs$DARWIN;
+			oper.setxattr.darwin = iconv_setxattr$DARWIN;
+			oper.getxattr.darwin = iconv_getxattr$DARWIN;
+		} else {
+			oper.getattr.vanilla = iconv_getattr;
+			oper.readdir.vanilla = iconv_readdir;
+			oper.utimens.vanilla = iconv_utimens;
+			oper.statfs.vanilla = iconv_statfs;
+			oper.setxattr.vanilla = iconv_setxattr;
+			oper.getxattr.vanilla = iconv_getxattr;
+		}
+		fs = fuse_fs_new(&oper, sizeof(oper), ic);
+	}
+#else
 	fs = fuse_fs_new(&iconv_oper, sizeof(iconv_oper), ic);
+#endif
 	if (!fs)
 		goto out_iconv_close_from;
 

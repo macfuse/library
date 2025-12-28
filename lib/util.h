@@ -40,10 +40,12 @@ static inline uint64_t fuse_higher_32_bits(uint64_t nr)
 		((type *)(__mptr - offsetof(type, member))); \
 	})
 
+#ifndef __APPLE__
 #if __has_attribute(__fallthrough__)
 #define fallthrough __attribute__((__fallthrough__))
 #else
 #define fallthrough do {} while (0)
+#endif
 #endif
 
 #endif /* FUSE_UTIL_H_ */

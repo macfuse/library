@@ -1,6 +1,7 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2025  Benjamin Fleischer
 
   Architecture-independent mounting code.
 
@@ -21,7 +22,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <paths.h>
-#if !defined( __NetBSD__) && !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__ANDROID__)
+#if !defined( __NetBSD__) && !defined(__FreeBSD__) && !defined(__DragonFly__) && !defined(__ANDROID__) && !defined(__APPLE__)
 #include <mntent.h>
 #else
 #define IGNORE_MTAB
@@ -33,7 +34,7 @@
 
 #include <sys/param.h>
 
-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__FreeBSD_kernel__)
+#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__FreeBSD_kernel__) || defined(__APPLE__)
 #define umount2(mnt, flags) unmount(mnt, ((flags) == 2) ? MNT_FORCE : 0)
 #endif
 

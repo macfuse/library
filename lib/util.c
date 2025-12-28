@@ -45,7 +45,11 @@ int libfuse_strtol(const char *str, long *res)
 void fuse_set_thread_name(const char *name)
 {
 #ifdef HAVE_PTHREAD_SETNAME_NP
+#ifdef __APPLE__
+	pthread_setname_np(name);
+#else
 	pthread_setname_np(pthread_self(), name);
+#endif
 #else
 	(void)name;
 #endif

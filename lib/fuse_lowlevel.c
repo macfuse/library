@@ -1,6 +1,8 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (c) 2006-2008  Amit Singh / Google Inc.
+  Copyright (c) 2011-2025  Benjamin Fleischer
 
   Implementation of (most of) the low-level FUSE API. The session loop
   functions are implemented in separate files.
@@ -10,6 +12,10 @@
 */
 
 #define _GNU_SOURCE
+
+#ifdef __APPLE__
+#define FUSE_DARWIN_OVERLOAD_OPERATIONS 1
+#endif
 
 #include "fuse_config.h"
 #include "fuse_i.h"
@@ -40,6 +46,10 @@
 
 #ifdef USDT_ENABLED
 #include "usdt.h"
+#endif
+
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
 #endif
 
 #ifndef F_LINUX_SPECIFIC_BASE
@@ -117,9 +127,15 @@ static void convert_stat(const struct stat *stbuf, struct fuse_attr *attr)
 	attr->atime	= stbuf->st_atime;
 	attr->mtime	= stbuf->st_mtime;
 	attr->ctime	= stbuf->st_ctime;
+#ifdef __APPLE__
+	attr->btime	= stbuf->st_birthtimespec.tv_sec;
+#endif
 	attr->atimensec = ST_ATIM_NSEC(stbuf);
 	attr->mtimensec = ST_MTIM_NSEC(stbuf);
 	attr->ctimensec = ST_CTIM_NSEC(stbuf);
+#ifdef __APPLE__
+	attr->btimensec = stbuf->st_birthtimespec.tv_nsec;
+#endif
 }
 
 static void convert_attr(const struct fuse_setattr_in *attr, struct stat *stbuf)
@@ -135,6 +151,51 @@ static void convert_attr(const struct fuse_setattr_in *attr, struct stat *stbuf)
 	ST_MTIM_NSEC_SET(stbuf, attr->mtimensec);
 	ST_CTIM_NSEC_SET(stbuf, attr->ctimensec);
 }
+
+#ifdef __APPLE__
+static void convert_attr_out$DARWIN(const struct fuse_darwin_attr *in_attr,
+				    struct fuse_attr *out_attr)
+{
+	out_attr->ino		= in_attr->ino;
+	out_attr->size		= in_attr->size;
+	out_attr->blocks	= in_attr->blocks;
+	out_attr->atime		= in_attr->atimespec.tv_sec;
+	out_attr->mtime		= in_attr->mtimespec.tv_sec;
+	out_attr->ctime		= in_attr->ctimespec.tv_sec;
+	out_attr->btime		= in_attr->btimespec.tv_sec;
+	out_attr->atimensec 	= in_attr->atimespec.tv_nsec;
+	out_attr->mtimensec 	= in_attr->mtimespec.tv_nsec;
+	out_attr->ctimensec 	= in_attr->ctimespec.tv_nsec;
+	out_attr->btimensec	= in_attr->btimespec.tv_nsec;
+	out_attr->mode		= in_attr->mode;
+	out_attr->nlink		= in_attr->nlink;
+	out_attr->uid		= in_attr->uid;
+	out_attr->gid		= in_attr->gid;
+	out_attr->rdev		= in_attr->rdev;
+	out_attr->flags		= in_attr->flags;
+	out_attr->blksize	= in_attr->blksize;
+}
+
+static void convert_attr_in$DARWIN(const struct fuse_setattr_in *in_attr,
+				   struct fuse_darwin_attr *out_attr)
+{
+	out_attr->mode			= in_attr->mode;
+	out_attr->uid			= in_attr->uid;
+	out_attr->gid			= in_attr->gid;
+	out_attr->atimespec.tv_sec	= in_attr->atime;
+	out_attr->atimespec.tv_nsec	= in_attr->atimensec;
+	out_attr->mtimespec.tv_sec	= in_attr->mtime;
+	out_attr->mtimespec.tv_nsec	= in_attr->mtimensec;
+	out_attr->ctimespec.tv_sec	= in_attr->ctime;
+	out_attr->ctimespec.tv_nsec	= in_attr->ctimensec;
+	out_attr->btimespec.tv_sec	= in_attr->btime;
+	out_attr->btimespec.tv_nsec	= in_attr->btimensec;
+	out_attr->bkuptimespec.tv_sec	= in_attr->bkuptime;
+	out_attr->bkuptimespec.tv_nsec	= in_attr->bkuptimensec;
+	out_attr->size 			= in_attr->size;
+	out_attr->flags			= in_attr->flags;
+}
+#endif
 
 static	size_t iov_length(const struct iovec *iov, size_t count)
 {
@@ -238,8 +299,13 @@ static int fuse_write_msg_dev(struct fuse_session *se, struct fuse_chan *ch,
 		/* se->io->writev is never NULL if se->io is not NULL as
 		 * specified by fuse_session_custom_io()
 		 */
+#ifdef __APPLE__
+		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
+				     se->ioc ? se->ioc->data : se->userdata);
+#else
 		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
 				     se->userdata);
+#endif
 	else
 		res = writev(ch ? ch->fd : se->fd, iov, count);
 
@@ -388,6 +454,38 @@ size_t fuse_add_direntry(fuse_req_t req, char *buf, size_t bufsize,
 	return entlen_padded;
 }
 
+#ifdef __APPLE__
+/* `buf` is allowed to be empty so that the proper size may be
+   allocated by the caller */
+size_t fuse_add_direntry$DARWIN(fuse_req_t req, char *buf, size_t bufsize,
+				const char *name,
+				const struct fuse_darwin_attr *attr, off_t off)
+{
+	(void)req;
+	size_t namelen;
+	size_t entlen;
+	size_t entlen_padded;
+	struct fuse_dirent *dirent;
+
+	namelen = strlen(name);
+	entlen = FUSE_NAME_OFFSET + namelen;
+	entlen_padded = FUSE_DIRENT_ALIGN(entlen);
+
+	if ((buf == NULL) || (entlen_padded > bufsize))
+		return entlen_padded;
+
+	dirent = (struct fuse_dirent*) buf;
+	dirent->ino = attr->ino;
+	dirent->off = off;
+	dirent->namelen = namelen;
+	dirent->type = (attr->mode & S_IFMT) >> 12;
+	memcpy(dirent->name, name, namelen);
+	memset(dirent->name + namelen, 0, entlen_padded - entlen);
+
+	return entlen_padded;
+}
+#endif
+
 static void convert_statfs(const struct statvfs *stbuf,
 			   struct fuse_kstatfs *kstatfs)
 {
@@ -400,6 +498,20 @@ static void convert_statfs(const struct statvfs *stbuf,
 	kstatfs->ffree	 = stbuf->f_ffree;
 	kstatfs->namelen = stbuf->f_namemax;
 }
+
+#ifdef __APPLE__
+static void convert_statfs$DARWIN(const struct statfs *stbuf,
+				  struct fuse_kstatfs *kstatfs)
+{
+	kstatfs->bsize	 = stbuf->f_iosize;
+	kstatfs->frsize	 = stbuf->f_bsize;
+	kstatfs->blocks	 = stbuf->f_blocks;
+	kstatfs->bfree	 = stbuf->f_bfree;
+	kstatfs->bavail	 = stbuf->f_bavail;
+	kstatfs->files	 = stbuf->f_files;
+	kstatfs->ffree	 = stbuf->f_ffree;
+}
+#endif
 
 static int send_reply_ok(fuse_req_t req, const void *arg, size_t argsize)
 {
@@ -449,6 +561,27 @@ static void fill_entry(struct fuse_entry_out *arg,
 	convert_stat(&e->attr, &arg->attr);
 }
 
+#ifdef __APPLE__
+static void fill_entry$DARWIN(struct fuse_entry_out *arg,
+			      const struct fuse_darwin_entry_param *e)
+{
+	arg->nodeid = e->ino;
+	arg->generation = e->generation;
+	arg->entry_valid = calc_timeout_sec(e->entry_timeout);
+	arg->entry_valid_nsec = calc_timeout_nsec(e->entry_timeout);
+	arg->attr_valid = calc_timeout_sec(e->attr_timeout);
+	arg->attr_valid_nsec = calc_timeout_nsec(e->attr_timeout);
+	convert_attr_out$DARWIN(&e->attr, &arg->attr);
+
+	/*
+	 * Note: The flags_darwin field was introduced before the official flags
+	 * field. Until the macOS backends support a new ABI version we need to
+	 * copy flags.
+	 */
+	arg->attr.flags_darwin = arg->attr.flags;
+}
+#endif
+
 /* `buf` is allowed to be empty so that the proper size may be
    allocated by the caller */
 size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
@@ -480,6 +613,41 @@ size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
 
 	return entlen_padded;
 }
+
+#ifdef __APPLE__
+/* `buf` is allowed to be empty so that the proper size may be
+   allocated by the caller */
+size_t fuse_add_direntry_plus$DARWIN(fuse_req_t req, char *buf, size_t bufsize,
+				     const char *name,
+				     const struct fuse_darwin_entry_param *e,
+				     off_t off)
+{
+	(void)req;
+	size_t namelen;
+	size_t entlen;
+	size_t entlen_padded;
+
+	namelen = strlen(name);
+	entlen = FUSE_NAME_OFFSET_DIRENTPLUS + namelen;
+	entlen_padded = FUSE_DIRENT_ALIGN(entlen);
+	if ((buf == NULL) || (entlen_padded > bufsize))
+		return entlen_padded;
+
+	struct fuse_direntplus *dp = (struct fuse_direntplus *) buf;
+	memset(&dp->entry_out, 0, sizeof(dp->entry_out));
+	fill_entry$DARWIN(&dp->entry_out, e);
+
+	struct fuse_dirent *dirent = &dp->dirent;
+	dirent->ino = e->attr.ino;
+	dirent->off = off;
+	dirent->namelen = namelen;
+	dirent->type = (e->attr.mode & S_IFMT) >> 12;
+	memcpy(dirent->name, name, namelen);
+	memset(dirent->name + namelen, 0, entlen_padded - entlen);
+
+	return entlen_padded;
+}
+#endif
 
 static void fill_open(struct fuse_open_out *arg,
 		      const struct fuse_file_info *f)
@@ -519,6 +687,25 @@ int fuse_reply_entry(fuse_req_t req, const struct fuse_entry_param *e)
 	return send_reply_ok(req, &arg, size);
 }
 
+#ifdef __APPLE__
+int fuse_reply_entry$DARWIN(fuse_req_t req,
+			    const struct fuse_darwin_entry_param *e)
+{
+	struct fuse_entry_out arg;
+	size_t size = req->se->conn.proto_minor < 9 ?
+		FUSE_COMPAT_ENTRY_OUT_SIZE : sizeof(arg);
+
+	/* before ABI 7.4 e->ino == 0 was invalid, only ENOENT meant
+	   negative entry */
+	if (!e->ino && req->se->conn.proto_minor < 4)
+		return fuse_reply_err(req, ENOENT);
+
+	memset(&arg, 0, sizeof(arg));
+	fill_entry$DARWIN(&arg, e);
+	return send_reply_ok(req, &arg, size);
+}
+#endif
+
 int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
 		      const struct fuse_file_info *f)
 {
@@ -535,6 +722,25 @@ int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
 			     entrysize + sizeof(struct fuse_open_out));
 }
 
+#ifdef __APPLE__
+int fuse_reply_create$DARWIN(fuse_req_t req,
+			     const struct fuse_darwin_entry_param *e,
+			     const struct fuse_file_info *f)
+{
+	alignas(uint64_t) char buf[sizeof(struct fuse_entry_out) + sizeof(struct fuse_open_out)];
+	size_t entrysize = req->se->conn.proto_minor < 9 ?
+		FUSE_COMPAT_ENTRY_OUT_SIZE : sizeof(struct fuse_entry_out);
+	struct fuse_entry_out *earg = (struct fuse_entry_out *) buf;
+	struct fuse_open_out *oarg = (struct fuse_open_out *) (buf + entrysize);
+
+	memset(buf, 0, sizeof(buf));
+	fill_entry$DARWIN(earg, e);
+	fill_open(oarg, f);
+	return send_reply_ok(req, buf,
+			     entrysize + sizeof(struct fuse_open_out));
+}
+#endif
+
 int fuse_reply_attr(fuse_req_t req, const struct stat *attr,
 		    double attr_timeout)
 {
@@ -549,6 +755,30 @@ int fuse_reply_attr(fuse_req_t req, const struct stat *attr,
 
 	return send_reply_ok(req, &arg, size);
 }
+
+#ifdef __APPLE__
+int fuse_reply_attr$DARWIN(fuse_req_t req, const struct fuse_darwin_attr *attr,
+			   double attr_timeout)
+{
+	struct fuse_attr_out arg;
+	size_t size = req->se->conn.proto_minor < 9 ?
+		FUSE_COMPAT_ATTR_OUT_SIZE : sizeof(arg);
+
+	memset(&arg, 0, sizeof(arg));
+	arg.attr_valid = calc_timeout_sec(attr_timeout);
+	arg.attr_valid_nsec = calc_timeout_nsec(attr_timeout);
+	convert_attr_out$DARWIN(attr, &arg.attr);
+
+	/*
+	 * Note: The flags_darwin field was introduced before the official flags
+	 * field. Until the macOS backends support a new ABI version we need to
+	 * copy flags.
+	 */
+	arg.attr.flags_darwin = arg.attr.flags;
+
+	return send_reply_ok(req, &arg, size);
+}
+#endif
 
 int fuse_reply_readlink(fuse_req_t req, const char *linkname)
 {
@@ -1052,6 +1282,20 @@ int fuse_reply_statfs(fuse_req_t req, const struct statvfs *stbuf)
 	return send_reply_ok(req, &arg, size);
 }
 
+#ifdef __APPLE__
+int fuse_reply_statfs$DARWIN(fuse_req_t req, const struct statfs *stbuf)
+{
+	struct fuse_statfs_out arg;
+	size_t size = req->se->conn.proto_minor < 4 ?
+		FUSE_COMPAT_STATFS_SIZE : sizeof(arg);
+
+	memset(&arg, 0, sizeof(arg));
+	convert_statfs$DARWIN(stbuf, &arg.st);
+
+	return send_reply_ok(req, &arg, size);
+}
+#endif
+
 int fuse_reply_xattr(fuse_req_t req, size_t count)
 {
 	struct fuse_getxattr_out arg;
@@ -1386,6 +1630,73 @@ static void _do_setattr(fuse_req_t req, const fuse_ino_t nodeid,
 	const struct fuse_setattr_in *arg = op_in;
 	uint32_t valid = arg->valid;
 
+#ifdef __APPLE__
+	/*
+	 * In macFUSE, support for ctime has existed before ctime support was
+	 * added for FUSE on Linux. We need to make sure to map
+	 * FATTR_DARWIN_CTIME to FATTR_CTIME.
+	 */
+	if (arg->valid & FATTR_DARWIN_CTIME) {
+		struct fuse_setattr_in *arg = (struct fuse_setattr_in *)op_in;
+		arg->ctime = arg->ctime_darwin;
+		arg->ctimensec = arg->ctimensec_darwin;
+		arg->valid |= FATTR_CTIME;
+	}
+
+	if (req->se->version.darwin_extensions_enabled) {
+		if (req->se->op.setattr.darwin) {
+			struct fuse_file_info *fi = NULL;
+			struct fuse_file_info fi_store;
+			struct fuse_darwin_attr attr;
+			memset(&attr, 0, sizeof(attr));
+			convert_attr_in$DARWIN(arg, &attr);
+			if (arg->valid & FATTR_FH) {
+				valid &= ~FATTR_FH;
+				memset(&fi_store, 0, sizeof(fi_store));
+				fi = &fi_store;
+				fi->fh = arg->fh;
+			}
+			valid &= FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID |
+				 FUSE_SET_ATTR_GID | FUSE_SET_ATTR_SIZE |
+				 FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME |
+				 FUSE_SET_ATTR_KILL_SUID |
+				 FUSE_SET_ATTR_KILL_SGID |
+				 FUSE_SET_ATTR_ATIME_NOW |
+				 FUSE_SET_ATTR_MTIME_NOW |
+				 FUSE_SET_ATTR_CTIME | FUSE_SET_ATTR_BTIME |
+				 FUSE_SET_ATTR_BKUPTIME	| FUSE_SET_ATTR_FLAGS;
+
+			req->se->op.setattr.darwin(req, nodeid, &attr, valid,
+						   fi);
+		} else
+			fuse_reply_err(req, ENOSYS);
+	} else {
+		if (req->se->op.setattr.vanilla) {
+			struct fuse_file_info *fi = NULL;
+			struct fuse_file_info fi_store;
+			struct stat stbuf;
+			memset(&stbuf, 0, sizeof(stbuf));
+			convert_attr(arg, &stbuf);
+			if (arg->valid & FATTR_FH) {
+				valid &= ~FATTR_FH;
+				memset(&fi_store, 0, sizeof(fi_store));
+				fi = &fi_store;
+				fi->fh = arg->fh;
+			}
+			valid &= FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID |
+				 FUSE_SET_ATTR_GID | FUSE_SET_ATTR_SIZE |
+				 FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME |
+				 FUSE_SET_ATTR_KILL_SUID |
+				 FUSE_SET_ATTR_KILL_SGID |
+				 FUSE_SET_ATTR_ATIME_NOW |
+				 FUSE_SET_ATTR_MTIME_NOW | FUSE_SET_ATTR_CTIME;
+
+			req->se->op.setattr.vanilla(req, nodeid, &stbuf, valid,
+						    fi);
+		} else
+			fuse_reply_err(req, ENOSYS);
+	}
+#else
 	if (req->se->op.setattr) {
 		struct fuse_file_info *fi = NULL;
 		struct fuse_file_info fi_store;
@@ -1408,6 +1719,7 @@ static void _do_setattr(fuse_req_t req, const fuse_ino_t nodeid,
 		req->se->op.setattr(req, nodeid, &stbuf, valid, fi);
 	} else
 		fuse_reply_err(req, ENOSYS);
+#endif
 }
 
 static void do_setattr(fuse_req_t req, const fuse_ino_t nodeid,
@@ -1555,6 +1867,10 @@ static void do_symlink(fuse_req_t req, const fuse_ino_t nodeid,
 	_do_symlink(req, nodeid, NULL, inarg);
 }
 
+#ifdef __APPLE__
+static void do_rename2(fuse_req_t req, fuse_ino_t nodeid, const void *inarg);
+#endif
+
 static void _do_rename(fuse_req_t req, const fuse_ino_t nodeid,
 		       const void *op_in, const void *in_payload)
 {
@@ -1572,6 +1888,21 @@ static void _do_rename(fuse_req_t req, const fuse_ino_t nodeid,
 static void do_rename(fuse_req_t req, const fuse_ino_t nodeid,
 		      const void *inarg)
 {
+#ifdef __APPLE__
+	/*
+	 * Support for the FUSE_RENAME2 semantics has been added to macFUSE in
+	 * ABI 7.19, before FUSE_RENAME2 was introduced.
+	 *
+	 * When FUSE_DARWIN_CAP_RENAME_EXT are enabled, macFUSE sends
+	 * FUSE_RENAME requests, but passes struct fuse_rename2_in as argument.
+	 */
+	if (req->se->conn.proto_major == 7 && req->se->conn.proto_minor == 19
+	    && (req->se->conn.want_ext & FUSE_DARWIN_CAP_RENAME_EXT)) {
+		do_rename2(req, nodeid, inarg);
+		return;
+	}
+#endif
+
 	const struct fuse_rename_in *arg = inarg;
 	const void *payload = PARAM(arg);
 
@@ -2048,11 +2379,41 @@ static void _do_setxattr(fuse_req_t req, const fuse_ino_t nodeid,
 
 	/* XXX:The API should be extended to support extra_flags/setxattr_flags */
 
+#ifdef __APPLE__
+	if (req->se->version.darwin_extensions_enabled) {
+		if (req->se->op.setxattr.darwin)
+			req->se->op.setxattr.darwin(req, nodeid, name, value,
+						    arg->size, arg->flags,
+						    arg->position);
+		else
+			fuse_reply_err(req, ENOSYS);
+	} else {
+		if (req->se->op.setxattr.vanilla) {
+			/*
+			 * The vanilla setxattr handler does not support the
+			 * position argument. This argument is only used
+			 * with the resource fork attribute and specifies an
+			 * offset within the attribute. For all other extended
+			 * attributes, this parameter is reserved and should be
+			 * zero.
+			 */
+			if (strcmp(name, "com.apple.ResourceFork") == 0) {
+				fuse_reply_err(req, ENOTSUP);
+				return;
+			}
+
+			req->se->op.setxattr.vanilla(req, nodeid, name, value,
+						     arg->size,arg->flags);
+		} else
+			fuse_reply_err(req, ENOSYS);
+	}
+#else
 	if (req->se->op.setxattr)
 		req->se->op.setxattr(req, nodeid, name, value, arg->size,
 				     arg->flags);
 	else
 		fuse_reply_err(req, ENOSYS);
+#endif
 }
 static void do_setxattr(fuse_req_t req, const fuse_ino_t nodeid,
 			const void *inarg)
@@ -2071,10 +2432,39 @@ static void _do_getxattr(fuse_req_t req, const fuse_ino_t nodeid,
 {
 	const struct fuse_getxattr_in *arg = op_in;
 
+#ifdef __APPLE__
+	if (req->se->version.darwin_extensions_enabled) {
+		if (req->se->op.getxattr.darwin)
+			req->se->op.getxattr.darwin(req, nodeid, in_payload,
+						    arg->size, arg->position);
+		else
+			fuse_reply_err(req, ENOSYS);
+	} else {
+		if (req->se->op.getxattr.vanilla) {
+			/*
+			 * The vanilla getxattr handler does not support the
+			 * position argument This argument is only used
+			 * with the resource fork attribute and specifies an
+			 * offset within the attribute. For all other extended
+			 * attributes, this parameter is reserved and should be
+			 * zero.
+			 */
+			if (strcmp(in_payload, "com.apple.ResourceFork") == 0) {
+				fuse_reply_err(req, ENOTSUP);
+				return;
+			}
+
+			req->se->op.getxattr.vanilla(req, nodeid, in_payload,
+						     arg->size);
+		} else
+			fuse_reply_err(req, ENOSYS);
+	}
+#else
 	if (req->se->op.getxattr)
 		req->se->op.getxattr(req, nodeid, in_payload, arg->size);
 	else
 		fuse_reply_err(req, ENOSYS);
+#endif
 }
 
 static void do_getxattr(fuse_req_t req, const fuse_ino_t nodeid,
@@ -2513,6 +2903,43 @@ static void do_lseek(fuse_req_t req, const fuse_ino_t nodeid, const void *inarg)
 	_do_lseek(req, nodeid, inarg, NULL);
 }
 
+#ifdef __APPLE__
+static void _do_monitor(fuse_req_t req, fuse_ino_t nodeid, const void *op_in,
+			const void *in_payload)
+{
+	(void)in_payload;
+	const struct fuse_monitor_in *arg = op_in;
+
+	if (req->se->op.monitor)
+		req->se->op.monitor(req, nodeid, arg->flags);
+	else
+		fuse_reply_none(req);
+}
+
+static void do_monitor(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	_do_monitor(req, nodeid, inarg, NULL);
+}
+
+static void _do_setvolname(fuse_req_t req, fuse_ino_t nodeid, const void *op_in,
+			   const void *in_payload)
+{
+	(void)nodeid;
+	(void)op_in;
+	const char *name = in_payload;
+
+	if (req->se->op.setvolname)
+		req->se->op.setvolname(req, name);
+	else
+		fuse_reply_err(req, ENOSYS);
+}
+
+static void do_setvolname(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	_do_setvolname(req, nodeid, NULL, inarg);
+}
+#endif
+
 #ifdef HAVE_STATX
 static void _do_statx(fuse_req_t req, const fuse_ino_t nodeid,
 		      const void *op_in, const void *in_payload)
@@ -2633,6 +3060,30 @@ bool fuse_get_feature_flag(struct fuse_conn_info *conn,
 	return conn->capable_ext & flag ? true : false;
 }
 
+#ifdef __APPLE__
+bool fuse_darwin_set_feature_flag(struct fuse_conn_info *conn,
+				  uint64_t flag)
+{
+	if (conn->capable_darwin & flag) {
+		conn->want_darwin |= flag;
+		return true;
+	}
+	return false;
+}
+
+void fuse_darwin_unset_feature_flag(struct fuse_conn_info *conn,
+				    uint64_t flag)
+{
+	conn->want_darwin &= ~flag;
+}
+
+bool fuse_darwin_get_feature_flag(struct fuse_conn_info *conn,
+				  uint64_t flag)
+{
+	return conn->capable_darwin & flag ? true : false;
+}
+#endif
+
 /* Prevent bogus data races (bogus since "init" is called before
  * multi-threading becomes relevant */
 static __attribute__((no_sanitize("thread"))) void
@@ -2681,9 +3132,26 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		return;
 	}
 
+#ifdef __APPLE__
+	if (arg->minor <= 19) {
+		/*
+		 * TODO(bf)
+		 *
+		 * The macFUSE kernel extension supports buffer sizes of up to
+		 * 32 MB. We pretend the kernel sent FUSE_MAX_PAGES to remove
+		 * the 128 KB (Intel) / 512 KB (Apple Silicon) buffer size
+		 * limit. We should clean this up when moving to 7.20.
+		 */
+
+		struct fuse_init_in *arg = (struct fuse_init_in *)op_in;
+		arg->flags |= FUSE_MAX_PAGES;
+	}
+#endif
+
 	if (arg->minor >= 6) {
 		if (arg->max_readahead < se->conn.max_readahead)
 			se->conn.max_readahead = arg->max_readahead;
+
 		inargflags = arg->flags;
 		if (inargflags & FUSE_INIT_EXT)
 			inargflags = inargflags | (uint64_t) arg->flags2 << 32;
@@ -2747,6 +3215,21 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		if (inargflags & FUSE_OVER_IO_URING)
 			se->conn.capable_ext |= FUSE_CAP_OVER_IO_URING;
 
+#ifdef __APPLE__
+		if (inargflags & FUSE_DARWIN_ACCESS_EXT)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_ACCESS_EXT;
+		if (inargflags & FUSE_DARWIN_THREAD_SAFE)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_THREAD_SAFE;
+		if (inargflags & FUSE_DARWIN_RENAME_EXT)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_RENAME_EXT;
+		if (inargflags & FUSE_DARWIN_FALLOCATE)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_FALLOCATE;
+		if (inargflags & FUSE_DARWIN_CASE_INSENSITIVE)
+			se->conn.capable_darwin |=
+				FUSE_DARWIN_CAP_CASE_INSENSITIVE;
+		if (inargflags & FUSE_DARWIN_SETVOLNAME)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_SETVOLNAME;
+#endif
 	} else {
 		se->conn.max_readahead = 0;
 	}
@@ -2792,6 +3275,22 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		       FUSE_CAP_READDIRPLUS_AUTO);
 	LL_SET_DEFAULT(1, FUSE_CAP_OVER_IO_URING);
 
+#ifdef __APPLE__
+#define LL_DARWIN_SET_DEFAULT(cond, cap) \
+	if ((cond)) \
+		fuse_darwin_set_feature_flag(&se->conn, cap)
+
+	if (req->se->version.darwin_extensions_enabled) {
+		LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_ACCESS_EXT);
+	} else {
+		LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_CASE_INSENSITIVE);
+	}
+	LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_THREAD_SAFE);
+	LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_RENAME_EXT);
+	LL_DARWIN_SET_DEFAULT(se->op.fallocate, FUSE_DARWIN_CAP_FALLOCATE);
+	LL_DARWIN_SET_DEFAULT(se->op.setvolname, FUSE_DARWIN_CAP_SETVOLNAME);
+#endif
+
 	/* This could safely become default, but libfuse needs an API extension
 	 * to support it
 	 * LL_SET_DEFAULT(1, FUSE_CAP_SETXATTR_EXT);
@@ -2813,7 +3312,13 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		fuse_convert_to_conn_want_ext(&se->conn);
 	}
 
-	if (!want_flags_valid(se->conn.capable_ext, se->conn.want_ext)) {
+#ifdef __APPLE__
+	if (!want_flags_valid(se->conn.capable_ext, se->conn.want_ext) ||
+	    !want_flags_valid(se->conn.capable_darwin, se->conn.want_darwin))
+#else
+	if (!want_flags_valid(se->conn.capable_ext, se->conn.want_ext))
+#endif
+	{
 		fuse_reply_err(req, EPROTO);
 		se->error = -EPROTO;
 		fuse_session_exit(se);
@@ -2905,6 +3410,29 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 		enable_io_uring = true;
 	}
 
+#ifdef __APPLE__
+	/*
+	 * TODO(bf)
+	 *
+	 * Resolve conflict with vanilla API. We need a separate field flags for
+	 * Darwin-only flags. As long as we don't support anything beyond ABI
+	 * version 7.19 on the kernel-side this should not be an issue, though.
+	 * We need to clean this up when moving to 7.20 or later.
+	 */
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_ACCESS_EXT)
+		outargflags |= FUSE_DARWIN_ACCESS_EXT;
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_THREAD_SAFE)
+		outargflags |= FUSE_DARWIN_THREAD_SAFE;
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_RENAME_EXT)
+		outargflags |= FUSE_DARWIN_RENAME_EXT;
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_FALLOCATE)
+		outargflags |= FUSE_DARWIN_FALLOCATE;
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_CASE_INSENSITIVE)
+		outargflags |= FUSE_DARWIN_CASE_INSENSITIVE;
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_SETVOLNAME)
+		outargflags |= FUSE_DARWIN_SETVOLNAME;
+#endif
+
 	if ((inargflags & FUSE_REQUEST_TIMEOUT) && se->conn.request_timeout) {
 		outargflags |= FUSE_REQUEST_TIMEOUT;
 		outarg.request_timeout = se->conn.request_timeout;
@@ -2990,14 +3518,18 @@ static void _do_destroy(fuse_req_t req, const fuse_ino_t nodeid,
 			const void *op_in, const void *in_payload)
 {
 	struct fuse_session *se = req->se;
+#ifndef __APPLE__
 	char *mountpoint;
+#endif
 
 	(void) nodeid;
 	(void)op_in;
 	(void)in_payload;
 
+#ifndef __APPLE__
 	mountpoint = atomic_exchange(&se->mountpoint, NULL);
 	free(mountpoint);
+#endif
 
 	se->got_destroy = 1;
 	se->got_init = 0;
@@ -3445,6 +3977,10 @@ static struct {
 	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_COPY_FILE_RANGE_64] = { do_copy_file_range_64, "COPY_FILE_RANGE_64" },
 	[FUSE_LSEEK]	   = { do_lseek,       "LSEEK"	     },
+#ifdef __APPLE__
+	[FUSE_MONITOR]     = { do_monitor,     "MONITOR"     },
+	[FUSE_SETVOLNAME]  = { do_setvolname,  "SETVOLNAME"  },
+#endif
 	[FUSE_STATX]	   = { do_statx,       "STATX"	     },
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
 };
@@ -3586,6 +4122,30 @@ static int fuse_ll_copy_from_pipe(struct fuse_bufvec *dst,
 	}
 	return 0;
 }
+
+#ifdef __APPLE__
+struct fuse_custom_io_ctx *fuse_custom_io_ctx_new(void *data,
+						  void (*destroy)(void *))
+{
+	struct fuse_custom_io_ctx *ioc;
+
+	ioc = malloc(sizeof(struct fuse_custom_io_ctx));
+	if (ioc != NULL) {
+		ioc->data = data;
+		ioc->destroy = destroy;
+	}
+
+	return ioc;
+ }
+
+void fuse_custom_io_ctx_destroy(struct fuse_custom_io_ctx *ioc)
+{
+	if (ioc != NULL) {
+		ioc->destroy(ioc->data);
+		free(ioc);
+	}
+}
+#endif
 
 void fuse_session_process_buf(struct fuse_session *se,
 			      const struct fuse_buf *buf)
@@ -3811,14 +4371,36 @@ void fuse_lowlevel_help(void)
 );
 }
 
+#ifdef __APPLE__
 void fuse_session_destroy(struct fuse_session *se)
 {
-	struct fuse_ll_pipe *llp;
-
 	if (se->got_init && !se->got_destroy) {
 		if (se->op.destroy)
 			se->op.destroy(se->userdata);
 	}
+	fuse_session_put(se);
+}
+#endif
+
+#ifdef __APPLE__
+static void fuse_session_destroy_real(struct fuse_session *se)
+#else
+void fuse_session_destroy(struct fuse_session *se)
+#endif
+{
+	struct fuse_ll_pipe *llp;
+
+#ifdef __APPLE__
+	assert(se->ctr == 0);
+
+	if (se->disk != NULL)
+		CFRelease(se->disk);
+#else
+	if (se->got_init && !se->got_destroy) {
+		if (se->op.destroy)
+			se->op.destroy(se->userdata);
+	}
+#endif
 	llp = pthread_getspecific(se->pipe_key);
 	if (llp != NULL)
 		fuse_ll_pipe_free(llp);
@@ -3831,6 +4413,11 @@ void fuse_session_destroy(struct fuse_session *se)
 		close(se->fd);
 	if (se->io != NULL)
 		free(se->io);
+#ifdef __APPLE__
+	if (se->ioc != NULL) {
+		fuse_custom_io_ctx_destroy(se->ioc);
+	}
+#endif
 	destroy_mount_opts(se->mo);
 	free(se);
 }
@@ -4035,8 +4622,13 @@ restart:
 	if (se->io != NULL) {
 		/* se->io->read is never NULL if se->io is not NULL as
 		specified by fuse_session_custom_io()*/
+#ifdef __APPLE__
+		res = se->io->read(ch ? ch->fd : se->fd, buf->mem, bufsize,
+				   se->ioc ? se->ioc->data : se->userdata);
+#else
 		res = se->io->read(ch ? ch->fd : se->fd, buf->mem, bufsize,
 				   se->userdata);
+#endif
 	} else {
 		res = read(ch ? ch->fd : se->fd, buf->mem, bufsize);
 	}
@@ -4145,6 +4737,9 @@ fuse_session_new_versioned(struct fuse_args *args,
 		fuse_log(FUSE_LOG_ERR, "fuse: failed to allocate fuse object\n");
 		goto out1;
 	}
+#ifdef __APPLE__
+	se->ctr = 1;
+#endif
 	se->fd = -1;
 	se->conn.max_write = FUSE_DEFAULT_MAX_PAGES_LIMIT * getpagesize();
 	se->bufsize = se->conn.max_write + FUSE_BUFFER_HEADER_SIZE;
@@ -4267,6 +4862,31 @@ struct fuse_session *fuse_session_new_30(struct fuse_args *args,
 					  userdata);
 }
 
+#ifdef __APPLE__
+struct fuse_session *fuse_session_get(struct fuse_session *se)
+{
+	assert(se->ctr > 0);
+	pthread_mutex_lock(&se->lock);
+	se->ctr++;
+	pthread_mutex_unlock(&se->lock);
+
+	return se;
+}
+
+void fuse_session_put(struct fuse_session *se)
+{
+	if (se == NULL)
+		return;
+	pthread_mutex_lock(&se->lock);
+	se->ctr--;
+	if (!se->ctr) {
+		pthread_mutex_unlock(&se->lock);
+		fuse_session_destroy_real(se);
+	} else
+		pthread_mutex_unlock(&se->lock);
+}
+#endif
+
 FUSE_SYMVER("fuse_session_custom_io_317", "fuse_session_custom_io@@FUSE_3.17")
 int fuse_session_custom_io_317(struct fuse_session *se,
 				const struct fuse_custom_io *io, size_t op_size, int fd)
@@ -4317,10 +4937,91 @@ int fuse_session_custom_io_30(struct fuse_session *se,
 			offsetof(struct fuse_custom_io, clone_fd), fd);
 }
 
+#ifdef __APPLE__
+static DASessionRef fuse_session_dasession;
+
+__attribute__((constructor))
+static void fuse_session_dasession_init(void)
+{
+	fuse_session_dasession = DASessionCreate(NULL);
+}
+
+__attribute__((destructor))
+static void fuse_session_dasession_destroy(void)
+{
+	CFRelease(fuse_session_dasession);
+}
+
+struct fuse_session_mount_context {
+	char mountpoint[MAXPATHLEN];
+	struct fuse_session *se;
+};
+
+static struct fuse_session_mount_context *
+fuse_session_mount_context_new(const char *mountpoint, struct fuse_session *se)
+{
+	struct fuse_session_mount_context *mc =
+		calloc(1, sizeof(struct fuse_session_mount_context));
+	if (mc == NULL) {
+		return NULL;
+	}
+
+	stpncpy(mc->mountpoint, mountpoint, sizeof(mc->mountpoint));
+	mc->se = fuse_session_get(se);
+	return mc;
+}
+
+static void
+fuse_session_mount_context_destroy(struct fuse_session_mount_context *mc)
+{
+	if (mc->se)
+		fuse_session_put(mc->se);
+	free(mc);
+}
+
+/*
+ * status codes:
+ * -1   => unknown error, assume mount(2) failed
+ * 0    => mount operation completed succesful
+ * > 0  => error code returned by mount(2)
+ */
+static void fuse_session_mount_callback(void *context, int status)
+{
+	struct fuse_session_mount_context *mc =
+		(struct fuse_session_mount_context *)context;
+	CFURLRef url = NULL;
+	DADiskRef disk = NULL;
+
+	if (status != 0) {
+		fuse_log(FUSE_LOG_ERR, "fuse: mount failed with error: %d\n",
+			 status);
+		goto out;
+	}
+
+	url = CFURLCreateFromFileSystemRepresentation(
+		NULL, (const UInt8 *)mc->mountpoint, strlen(mc->mountpoint),
+		TRUE);
+	disk = DADiskCreateFromVolumePath(NULL, fuse_session_dasession, url);
+	CFRelease(url);
+
+	if (disk) {
+		pthread_mutex_lock(&mc->se->lock);
+		mc->se->disk = disk;
+		pthread_mutex_unlock(&mc->se->lock);
+	}
+
+out:
+	fuse_session_mount_context_destroy(mc);
+}
+#endif
+
 int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 {
 	int fd;
 	char *mountpoint;
+#ifdef __APPLE__
+	struct fuse_session_mount_context *mc;
+#endif
 
 	if (_mountpoint == NULL) {
 		fuse_log(FUSE_LOG_ERR, "Invalid null-ptr mountpoint!\n");
@@ -4344,6 +5045,13 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 			close(fd);
 	} while (fd >= 0 && fd <= 2);
 
+#ifdef __APPLE__
+	if (fuse_darwin_custom_io(se->mo, &se->io, &se->ioc) != 0) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to setup custom io\n");
+		goto error_out;
+	}
+#endif
+
 	/*
 	 * To allow FUSE daemons to run without privileges, the caller may open
 	 * /dev/fuse before launching the file system and pass on the file
@@ -4362,6 +5070,24 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 		return 0;
 	}
 
+#ifdef __APPLE__
+	mc = fuse_session_mount_context_new(mountpoint, se);
+	if (mc == NULL) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to allocate mount context\n");
+		goto error_out;
+	}
+
+	/* Open channel */
+	fd = fuse_darwin_mount(mountpoint, se->mo, &fuse_session_mount_callback,
+			       mc);
+	if (fd == -1) {
+		/* fuse_session_mount_callback() is not going to be called */
+		fuse_session_mount_context_destroy(mc);
+		goto error_out;
+	}
+	se->fd = fd;
+#else
 	/* Open channel */
 	fd = fuse_kern_mount(mountpoint, se->mo);
 	if (fd == -1)
@@ -4370,6 +5096,7 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 
 	/* Save mountpoint */
 	se->mountpoint = mountpoint;
+#endif
 
 	return 0;
 
@@ -4385,6 +5112,27 @@ int fuse_session_fd(struct fuse_session *se)
 
 void fuse_session_unmount(struct fuse_session *se)
 {
+#ifdef __APPLE__
+	DADiskRef disk = NULL;
+
+	/*
+	 * Note: Once mount(2) completes, we attach a DADiskRef of our volume
+	 * to the session. se->disk might be NULL.
+	 */
+	pthread_mutex_lock(&se->lock);
+	disk = se->disk;
+	se->disk = NULL;
+	pthread_mutex_unlock(&se->lock);
+
+	if (disk != NULL) {
+		DADiskUnmountOptions options = kDADiskUnmountOptionDefault;
+		if (fuse_session_exited(se))
+			options |= kDADiskUnmountOptionForce;
+
+		fuse_darwin_unmount(disk, options, se->fd);
+		CFRelease(disk);
+	}
+#else
 	if (se->mountpoint != NULL) {
 		char *mountpoint = atomic_exchange(&se->mountpoint, NULL);
 
@@ -4392,6 +5140,7 @@ void fuse_session_unmount(struct fuse_session *se)
 		se->fd = -1;
 		free(mountpoint);
 	}
+#endif
 }
 
 #ifdef linux

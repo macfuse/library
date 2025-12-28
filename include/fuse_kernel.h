@@ -289,16 +289,42 @@ struct fuse_attr {
 	uint64_t	atime;
 	uint64_t	mtime;
 	uint64_t	ctime;
+#ifdef __APPLE__
+	uint64_t	btime;
+#endif
 	uint32_t	atimensec;
 	uint32_t	mtimensec;
 	uint32_t	ctimensec;
+#ifdef __APPLE__
+	uint32_t	btimensec;
+#endif
 	uint32_t	mode;
 	uint32_t	nlink;
 	uint32_t	uid;
 	uint32_t	gid;
 	uint32_t	rdev;
+#ifdef __APPLE__
+	/*
+	 * TODO(bf)
+	 *
+	 * Is there a better way of dealing with two flags fields? The field
+	 * flags_darwin (originally named flags) was introduced before the
+	 * official flags field below.
+	 */
+	uint32_t	flags_darwin;
+#endif
 	uint32_t	blksize;
 	uint32_t	flags;
+#ifdef __APPLE__
+	/*
+	 * TODO(bf)
+	 *
+	 * Currently there is no way for us to pass bkuptime to the kernel when
+	 * replying to FUSE_GETATTR. The only option would be implementing
+	 * FUSE_GETXTIMES, which is not very appealing. We will need to extend
+	 * fuse_attr in a future ABI version.
+	 */
+#endif
 };
 
 /*
@@ -370,6 +396,12 @@ struct fuse_file_lock {
 #define FATTR_LOCKOWNER	(1 << 9)
 #define FATTR_CTIME	(1 << 10)
 #define FATTR_KILL_SUIDGID	(1 << 11)
+#ifdef __APPLE__
+#define FATTR_BTIME	(1 << 28)
+#define FATTR_DARWIN_CTIME	(1 << 29)
+#define FATTR_BKUPTIME	(1 << 30)
+#define FATTR_FLAGS	(1 << 31)
+#endif
 
 /**
  * Flags returned by the OPEN request
@@ -391,6 +423,10 @@ struct fuse_file_lock {
 #define FOPEN_NOFLUSH		(1 << 5)
 #define FOPEN_PARALLEL_DIRECT_WRITES	(1 << 6)
 #define FOPEN_PASSTHROUGH	(1 << 7)
+#ifdef __APPLE__
+#define FOPEN_PURGE_ATTR	(1 << 30)
+#define FOPEN_PURGE_UBC		(1 << 31)
+#endif
 
 /**
  * INIT request/reply flags
@@ -494,6 +530,22 @@ struct fuse_file_lock {
 #define FUSE_ALLOW_IDMAP	(1ULL << 40)
 #define FUSE_OVER_IO_URING	(1ULL << 41)
 #define FUSE_REQUEST_TIMEOUT	(1ULL << 42)
+
+#ifdef __APPLE__
+/*
+ * TODO(bf)
+ *
+ * Resolve conflict with vanilla API. As long as we don't support anything
+ * beyond 7.19 on the kernel-side this should not be an issue. We need to clean
+ * this up when moving to 7.20 or later.
+ */
+#define FUSE_DARWIN_ACCESS_EXT        (1 << 23)
+#define FUSE_DARWIN_THREAD_SAFE        (1 << 24)
+#define FUSE_DARWIN_RENAME_EXT        ((1 << 25) | (1 << 26))
+#define FUSE_DARWIN_FALLOCATE        (1 << 27)
+#define FUSE_DARWIN_CASE_INSENSITIVE    (1 << 29)
+#define FUSE_DARWIN_SETVOLNAME        (1 << 30)
+#endif
 
 /**
  * CUSE INIT request/reply flags
@@ -662,6 +714,12 @@ enum fuse_opcode {
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
+#ifdef __APPLE__
+	FUSE_MONITOR		= 60,
+	FUSE_SETVOLNAME   	= 61,
+	FUSE_GETXTIMES   	= 62,
+	FUSE_EXCHANGE     	= 63,
+#endif
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -686,7 +744,11 @@ enum fuse_notify_code {
 /* The read buffer is required to be at least 8k, but may be much larger */
 #define FUSE_MIN_READ_BUFFER 8192
 
+#ifdef __APPLE__
+#define FUSE_COMPAT_ENTRY_OUT_SIZE 136
+#else
 #define FUSE_COMPAT_ENTRY_OUT_SIZE 120
+#endif
 
 struct fuse_entry_out {
 	uint64_t	nodeid;		/* Inode ID */
@@ -719,7 +781,11 @@ struct fuse_getattr_in {
 	uint64_t	fh;
 };
 
+#ifdef __APPLE__
+#define FUSE_COMPAT_ATTR_OUT_SIZE 112
+#else
 #define FUSE_COMPAT_ATTR_OUT_SIZE 96
+#endif
 
 struct fuse_attr_out {
 	uint64_t	attr_valid;	/* Cache timeout for the attributes */
@@ -727,6 +793,15 @@ struct fuse_attr_out {
 	uint32_t	dummy;
 	struct fuse_attr attr;
 };
+
+#ifdef __APPLE__
+struct fuse_getxtimes_out {
+	uint64_t	bkuptime;
+	uint64_t	btime;
+	uint32_t	bkuptimensec;
+	uint32_t	btimensec;
+};
+#endif
 
 struct fuse_statx_in {
 	uint32_t	getattr_flags;
@@ -789,6 +864,23 @@ struct fuse_setattr_in {
 	uint32_t	uid;
 	uint32_t	gid;
 	uint32_t	unused5;
+#ifdef __APPLE__
+	uint64_t	bkuptime;
+	/*
+	 * TODO(bf)
+	 *
+	 * Is there a better way of dealing with two ctime(nsec) values?
+	 * The ctime(nsec)_darwin values (originally named chgtime and
+	 * chgtimensec) were introduced before the official ctime(nsec) values
+	 * above.
+	 */
+	uint64_t	ctime_darwin;
+	uint64_t	btime;
+	uint32_t	bkuptimensec;
+	uint32_t	ctimensec_darwin;
+	uint32_t	btimensec;
+	uint32_t	flags; /* file flags; see chflags(2) */
+#endif
 };
 
 struct fuse_open_in {
@@ -862,18 +954,31 @@ struct fuse_fsync_in {
 	uint32_t	padding;
 };
 
+#ifdef __APPLE__
+#define FUSE_COMPAT_SETXATTR_IN_SIZE 16
+#else
 #define FUSE_COMPAT_SETXATTR_IN_SIZE 8
+#endif
 
 struct fuse_setxattr_in {
 	uint32_t	size;
 	uint32_t	flags;
+#ifdef __APPLE__
+	uint32_t	position;
+#endif
 	uint32_t	setxattr_flags;
+#ifndef __APPLE__
 	uint32_t	padding;
+#endif
 };
 
 struct fuse_getxattr_in {
 	uint32_t	size;
 	uint32_t	padding;
+#ifdef __APPLE__
+	uint32_t	position;
+	uint32_t	padding2;
+#endif
 };
 
 struct fuse_getxattr_out {
@@ -1074,6 +1179,13 @@ struct fuse_direntplus {
 	offsetof(struct fuse_direntplus, dirent.name)
 #define FUSE_DIRENTPLUS_SIZE(d) \
 	FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS + (d)->dirent.namelen)
+
+#ifdef __APPLE__
+struct fuse_monitor_in {
+	uint32_t 	flags;
+	uint32_t	padding;
+};
+#endif
 
 struct fuse_notify_inval_inode_out {
 	uint64_t	ino;

@@ -1,6 +1,7 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+  Copyright (C) 2017-2025  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt
@@ -14,11 +15,21 @@
 #include "util.h"
 
 #include <pthread.h>
+#ifndef __APPLE__
 #include <semaphore.h>
+#endif
 #include <stdint.h>
 #include <stdbool.h>
 #include <errno.h>
 #include <stdatomic.h>
+
+#ifdef __APPLE__
+#include <DiskArbitration/DiskArbitration.h>
+#endif
+
+#if defined(__APPLE__) && defined(MIN)
+#undef MIN
+#endif
 
 #define MIN(a, b) \
 ({									\
@@ -26,6 +37,28 @@
 	typeof(b) _b = (b);						\
 	_a < _b ? _a : _b;						\
 })
+
+#ifdef __APPLE__
+/*
+ * Unnamed semaphores are not available on macOS. We use dispatch semaphores as
+ * fallback.
+ *
+ * Unlike unnamed semaphores, dispatch semaphores are not async-signal safe.
+ * This means using dispatch semaphores in signal handlers is not safe. This
+ * is not an issue here since we do not use semaphores in signal handlers.
+ *
+ * Unlike sem_wait(), dispatch_semmaphore_wait() is not interruptible. This is
+ * not an issue here since we do not rely on sem_wait() being interruptible.
+ */
+
+#include <dispatch/dispatch.h>
+
+#define sem_t dispatch_semaphore_t
+#define sem_init(s, p, v) *(s) = dispatch_semaphore_create((v))
+#define sem_post(s) dispatch_semaphore_signal(*(s))
+#define sem_wait(s) dispatch_semaphore_wait(*(s), DISPATCH_TIME_FOREVER)
+#define sem_destroy(s) dispatch_release(*(s))
+#endif /* __APPLE__ */
 
 struct mount_opts;
 struct fuse_ring_pool;
@@ -64,6 +97,17 @@ struct fuse_notify_req {
 	struct fuse_notify_req *prev;
 };
 
+#ifdef __APPLE__
+struct fuse_custom_io_ctx {
+	void *data;
+	void (*destroy)(void *context);
+};
+
+struct fuse_custom_io_ctx *fuse_custom_io_ctx_new(void *data,
+						  void (*destroy)(void *));
+void fuse_custom_io_ctx_destroy(struct fuse_custom_io_ctx *ioc);
+#endif
+
 struct fuse_session_uring {
 	bool enable;
 	unsigned int q_depth;
@@ -71,9 +115,17 @@ struct fuse_session_uring {
 };
 
 struct fuse_session {
+#ifdef __APPLE__
+	int ctr;
+	DADiskRef disk;
+#else
 	_Atomic(char *)mountpoint;
+#endif
 	int fd;
 	struct fuse_custom_io *io;
+#ifdef __APPLE__
+	struct fuse_custom_io_ctx *ioc;
+#endif
 	struct mount_opts *mo;
 	int debug;
 	int deny_others;
@@ -191,6 +243,23 @@ struct fuse_loop_config
 };
 #endif
 
+#ifdef __APPLE__
+/**
+ * Obtain counted reference to the session
+ *
+ * @param ch the session
+ * @return the session
+ */
+struct fuse_session *fuse_session_get(struct fuse_session *se);
+
+/**
+ * Drop counted reference to a session
+ *
+ * @param ch the session
+ */
+void fuse_session_put(struct fuse_session *se);
+#endif
+
 /* ----------------------------------------------------------- *
  * Channel interface (when using -o clone_fd)		       *
  * ----------------------------------------------------------- */
@@ -214,8 +283,21 @@ struct mount_opts *parse_mount_opts(struct fuse_args *args);
 void destroy_mount_opts(struct mount_opts *mo);
 void fuse_mount_version(void);
 unsigned get_max_read(struct mount_opts *o);
+
+#ifdef __APPLE__
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd);
+#else
 void fuse_kern_unmount(const char *mountpoint, int fd);
+#endif
+
+#ifdef __APPLE__
+int fuse_darwin_custom_io(struct mount_opts *mo, struct fuse_custom_io **io,
+			  struct fuse_custom_io_ctx **ioc);
+int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
+		      void (*callback)(void *, int), void *context);
+#else
 int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo);
+#endif
 
 int fuse_send_reply_iov_nofree(fuse_req_t req, int error, struct iovec *iov,
 			       int count);
