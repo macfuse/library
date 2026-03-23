@@ -763,7 +763,7 @@ static int fuse_uring_init_queue(struct fuse_ring_queue *queue)
 	if (res != 0) {
 		fuse_log(FUSE_LOG_ERR, "qid=%d io_uring init failed\n",
 			 queue->qid);
-		goto err;
+		return res;
 	}
 
 	queue->req_header_sz = ROUND_UP(sizeof(struct fuse_ring_ent),
@@ -781,10 +781,14 @@ static int fuse_uring_init_queue(struct fuse_ring_queue *queue)
 		 */
 		ring_ent->req_header =
 			numa_alloc_local(queue->req_header_sz);
+		if (!ring_ent->req_header)
+			return -ENOMEM;
 		ring_ent->req_payload_sz = ring->max_req_payload_sz;
 
 		ring_ent->op_payload =
 			numa_alloc_local(ring_ent->req_payload_sz);
+		if (!ring_ent->op_payload)
+			return -ENOMEM;
 
 		req->se = se;
 		pthread_mutex_init(&req->lock, NULL);
@@ -800,13 +804,10 @@ static int fuse_uring_init_queue(struct fuse_ring_queue *queue)
 			"Grave fuse-uring error on preparing SQEs, aborting\n");
 		se->error = -EIO;
 		fuse_session_exit(se);
+		return res;
 	}
 
 	return queue->ring.ring_fd;
-
-err:
-	close(queue->eventfd);
-	return res;
 }
 
 static void *fuse_uring_thread(void *arg)
@@ -928,8 +929,9 @@ int fuse_uring_start(struct fuse_session *se)
 err:
 	if (err) {
 		/* Note all threads need to have been started */
-		fuse_session_destruct_uring(fuse_ring);
-		se->uring.pool = fuse_ring;
+		if (fuse_ring)
+			fuse_session_destruct_uring(fuse_ring);
+		se->uring.pool = NULL;
 	}
 	return err;
 }
