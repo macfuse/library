@@ -2,7 +2,7 @@
   FUSE: Filesystem in Userspace
   Copyright (C) 2005-2008 Csaba Henk <csaba.henk@creo.hu>
   Copyright (C) 2006-2008 Amit Singh / Google Inc.
-  Copyright (C) 2011-2025 Benjamin Fleischer
+  Copyright (C) 2011-2026 Benjamin Fleischer
 
   Architecture specific file system mounting (Darwin). Derived from mount_bsd.c
   from the FUSE distribution.
@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include <DiskArbitration/DiskArbitration.h>
+#include <MFMount/MFMount.h>
 
 enum {
 	KEY_ALLOW_ROOT,
@@ -367,11 +368,7 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 		goto out;
 	}
 
-	if (mo->backend && strcmp(mo->backend, "fskit") == 0)
-		mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG_FSKIT);
-	else
-		mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG);
-
+	mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG);
 	if (!mount_tool_path) {
 		fuse_log(FUSE_LOG_ERR, "fuse: mount program missing\n");
 		return -1;
@@ -422,9 +419,6 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 			setenv("_FUSE_COMMVERS", "2", 1);
 
 			argv[a++] = mount_tool_path;
-			if (mo->backend && strcmp(mo->backend, "fskit") == 0) {
-				argv[a++] = "mount";
-			}
 			if (mo->kernel_opts) {
 				argv[a++] = "-o";
 				argv[a++] = mo->kernel_opts;
@@ -451,7 +445,7 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 
 	if (fd != -1 && callback) {
 		int res = -1;
-		pthread_t mount_wait_thread = NULL;
+		pthread_t mount_wait_thread;
 
 		struct fuse_mount_core_wait_arg *arg =
 			calloc(1, sizeof(struct fuse_mount_core_wait_arg));
@@ -485,6 +479,94 @@ out:
 	return fd;
 }
 
+struct fuse_mount_ext_arg {
+	char *mountpoint;
+	char *options;
+	bool quiet_mode;
+	int socket;
+	void (*callback)(void *context, int res);
+	void *context;
+};
+
+static void *fuse_mount_ext_bg(void *arg)
+{
+	struct fuse_mount_ext_arg *a = (struct fuse_mount_ext_arg *)arg;
+	int res = -1;
+
+	res = MFMount(a->mountpoint, a->options, a->quiet_mode, a->socket);
+	if (a->callback) {
+		a->callback(a->context, res);
+	}
+
+	close(a->socket);
+	free(a->mountpoint);
+	free(a->options);
+	free(a);
+
+	return NULL;
+}
+
+static int fuse_mount_ext(const char *mountpoint, struct mount_opts *mo,
+			  void (*callback)(void *, int), void *context)
+{
+	int res = -1;
+	int fds[2];
+	struct fuse_mount_ext_arg *arg = NULL;
+	pthread_t mount_ext_thread;
+
+	res = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	if (res == -1) {
+		fuse_log(FUSE_LOG_ERR, "fuse: socketpair() failed\n");
+		return -1;
+	}
+
+	arg = calloc(1, sizeof(struct fuse_mount_ext_arg));
+	if (!arg) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to allocate fuse_mount_ext_arg\n");
+		close(fds[0]);
+		close(fds[1]);
+		return -1;
+	}
+
+	arg->mountpoint = strdup(mountpoint);
+	arg->options = strdup(mo->kernel_opts);
+	arg->quiet_mode = mo->quiet_mode;
+	arg->socket = fds[1];
+	arg->callback = callback;
+	arg->context = context;
+
+	if (!arg->mountpoint || !arg->options) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to initialize fuse_mount_ext_arg\n");
+
+		close(fds[0]);
+		close(fds[1]);
+
+		free(arg->mountpoint);
+		free(arg->options);
+		free(arg);
+		return -1;
+	}
+
+	res = fuse_start_thread(&mount_ext_thread,
+				&fuse_mount_ext_bg, (void *)arg);
+	if (res) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to mount volume\n");
+
+		close(fds[0]);
+		close(fds[1]);
+
+		free(arg->mountpoint);
+		free(arg->options);
+		free(arg);
+		return -1;
+	}
+
+	pthread_detach(mount_ext_thread);
+	return fds[0];
+}
+
 struct mount_opts *parse_mount_opts(struct fuse_args *args)
 {
 	struct mount_opts *mo;
@@ -496,7 +578,8 @@ struct mount_opts *parse_mount_opts(struct fuse_args *args)
 	memset(mo, 0, sizeof(struct mount_opts));
 
 	if (args &&
-	    fuse_opt_parse(args, mo, fuse_mount_opts, fuse_mount_opt_proc) == -1)
+	    fuse_opt_parse(args, mo, fuse_mount_opts,
+			   fuse_mount_opt_proc) == -1)
 		goto err_out;
 
 	return mo;
@@ -548,8 +631,12 @@ int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
 		return -1;
 	}
 
-	/* Notify mount tool that it is called from lib */
-	setenv("_FUSE_CALL_BY_LIB", "1", 1);
+	if (mo->backend && strcmp(mo->backend, "fskit") == 0) {
+		return fuse_mount_ext(mountpoint, mo, callback, context);
+	} else {
+		/* Notify mount tool that it is called from lib */
+		setenv("_FUSE_CALL_BY_LIB", "1", 1);
 
-	return fuse_mount_core(mountpoint, mo, callback, context);
+		return fuse_mount_core(mountpoint, mo, callback, context);
+	}
 }
