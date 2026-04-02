@@ -37,6 +37,7 @@
 #include <unistd.h>
 
 #include <DiskArbitration/DiskArbitration.h>
+#include <MFMount/MFMount.h>
 
 static int quiet_mode = 0;
 
@@ -391,12 +392,7 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 		goto out;
 	}
 
-	if (mo->backend && strcmp(mo->backend, "fskit") == 0)
-		mount_prog_path = FUSE_MOUNT_PROG_FSKIT;
-	else
-		mount_prog_path = FUSE_MOUNT_PROG;
-
-	mount_prog_path = fuse_resource_path(mount_prog_path);
+	mount_prog_path = fuse_resource_path(FUSE_MOUNT_PROG);
 	if (!mount_prog_path) {
 		fprintf(stderr, "fuse: mount program missing\n");
 		return -1;
@@ -446,9 +442,6 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 			setenv("_FUSE_COMMVERS", "2", 1);
 
 			argv[a++] = mount_prog_path;
-			if (mo->backend && strcmp(mo->backend, "fskit") == 0) {
-				argv[a++] = "mount";
-			}
 			if (mo->kernel_opts) {
 				argv[a++] = "-o";
 				argv[a++] = mo->kernel_opts;
@@ -507,6 +500,92 @@ out:
 	return fd;
 }
 
+struct fuse_mount_ext_arg {
+	char *mountpoint;
+	char *options;
+	int socket;
+	void (*callback)(void *context, int res);
+	void *context;
+};
+
+static void *fuse_mount_ext_bg(void *arg)
+{
+	struct fuse_mount_ext_arg *a = (struct fuse_mount_ext_arg *)arg;
+	int res = -1;
+
+	res = MFMount(a->mountpoint, a->options, quiet_mode, a->socket);
+	if (a->callback) {
+		a->callback(a->context, res);
+	}
+
+	close(a->socket);
+	free(a->mountpoint);
+	free(a->options);
+	free(a);
+
+	return NULL;
+}
+
+static int fuse_mount_ext(const char *mountpoint, struct mount_opts *mo,
+			  void (*callback)(void *, int), void *context)
+{
+	int res = -1;
+	int fds[2];
+	struct fuse_mount_ext_arg *arg = NULL;
+	pthread_t mount_ext_thread;
+
+	res = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	if (res == -1) {
+		fprintf(stderr, "fuse: socketpair() failed\n");
+		return -1;
+	}
+
+	arg = calloc(1, sizeof(struct fuse_mount_ext_arg));
+	if (!arg) {
+		fprintf(stderr,
+			"fuse: failed to allocate fuse_mount_ext_arg\n");
+		close(fds[0]);
+		close(fds[1]);
+		return -1;
+	}
+
+	arg->mountpoint = strdup(mountpoint);
+	arg->options = strdup(mo->kernel_opts);
+	arg->socket = fds[1];
+	arg->callback = callback;
+	arg->context = context;
+
+	if (!arg->mountpoint || !arg->options) {
+		fprintf(stderr,
+			"fuse: failed to initialize fuse_mount_ext_arg\n");
+
+		close(fds[0]);
+		close(fds[1]);
+
+		free(arg->mountpoint);
+		free(arg->options);
+		free(arg);
+		return -1;
+	}
+
+	res = fuse_start_thread(&mount_ext_thread,
+				&fuse_mount_ext_bg, (void *)arg);
+	if (res) {
+		fprintf(stderr, "fuse: failed to mount volume\n");
+
+		close(fds[0]);
+		close(fds[1]);
+
+		free(arg->mountpoint);
+		free(arg->options);
+		free(arg);
+		return -1;
+	}
+
+	pthread_detach(mount_ext_thread);
+	return fds[0];
+}
+
 int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
 		    void (*callback)(void *, int), void *context)
 {
@@ -534,7 +613,11 @@ int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
 		goto out;
 	}
 
-	res = fuse_mount_core(mountpoint, &mo, callback, context);
+	if (mo.backend && strcmp(mo.backend, "fskit") == 0) {
+		res = fuse_mount_ext(mountpoint, &mo, callback, context);
+	} else {
+		res = fuse_mount_core(mountpoint, &mo, callback, context);
+	}
 
 out:
 	free(mo.kernel_opts);

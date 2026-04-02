@@ -17,7 +17,6 @@
 
 #ifndef FUSE_MOUNT_PROG
 #  define FUSE_MOUNT_PROG "/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse"
-#  define FUSE_MOUNT_PROG_FSKIT "/Library/Filesystems/macfuse.fs/Contents/Resources/macfuse.app/Contents/MacOS/macfuse"
 #endif
 
 #ifndef FUSE_VOLUME_ICON
