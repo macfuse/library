@@ -1897,7 +1897,7 @@ static void do_rename(fuse_req_t req, const fuse_ino_t nodeid,
 	 * FUSE_RENAME requests, but passes struct fuse_rename2_in as argument.
 	 */
 	if (req->se->conn.proto_major == 7 && req->se->conn.proto_minor == 19
-	    && (req->se->conn.want_ext & FUSE_DARWIN_CAP_RENAME_EXT)) {
+	    && (req->se->conn.want_darwin & FUSE_DARWIN_CAP_RENAME_EXT)) {
 		do_rename2(req, nodeid, inarg);
 		return;
 	}
