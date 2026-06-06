@@ -6,18 +6,9 @@
   See the file COPYING.LIB
 */
 
-/*
- * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2015 Benjamin Fleischer
- */
-
 #include "fuse_lowlevel.h"
 #include "fuse_kernel.h"
 #include "fuse_i.h"
-
-#ifdef __APPLE__
-#  include "fuse_darwin.h"
-#endif
 
 #include <stdio.h>
 #include <errno.h>
@@ -60,7 +51,6 @@ restart:
 		fprintf(stderr, "short read on fuse device\n");
 		return -EIO;
 	}
-
 	return res;
 }
 
@@ -89,19 +79,11 @@ static void fuse_kern_chan_destroy(struct fuse_chan *ch)
 {
 	int fd = fuse_chan_fd(ch);
 
-	if (fd != -1) {
-#ifdef __APPLE__
-		(void)ioctl(fd, FUSEDEVIOCSETDAEMONDEAD, &fd);
-#endif
+	if (fd != -1)
 		close(fd);
-	}
 }
 
-#ifdef __APPLE__
-#define MIN_BUFSIZE ((FUSE_DEFAULT_USERKERNEL_BUFSIZE) + 0x1000)
-#else
 #define MIN_BUFSIZE 0x21000
-#endif
 
 struct fuse_chan *fuse_kern_chan_new(int fd)
 {
@@ -110,7 +92,7 @@ struct fuse_chan *fuse_kern_chan_new(int fd)
 		.send = fuse_kern_chan_send,
 		.destroy = fuse_kern_chan_destroy,
 	};
-	size_t bufsize = sysconf(_SC_PAGESIZE) + 0x1000;
+	size_t bufsize = getpagesize() + 0x1000;
 	bufsize = bufsize < MIN_BUFSIZE ? MIN_BUFSIZE : bufsize;
 	return fuse_chan_new(&op, fd, bufsize, NULL);
 }

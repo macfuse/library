@@ -794,6 +794,22 @@ int fuse_loop_dispatch(struct fuse *f);
  */
 struct fuse_context *fuse_get_context(void);
 
+#ifdef __APPLE__
+/**
+ * Get the reply buffer for the current high-level request, if available.
+ *
+ * This is useful for file systems that want to write reply payload bytes
+ * directly into transport-provided storage and avoid an extra copy. The
+ * returned buffer is borrowed from the current request and remains valid only
+ * until the request is replied to.
+ *
+ * @param buf pointer to the reply buffer
+ * @param size size of the reply buffer
+ * @return 0 on success, -errno on failure
+ */
+int fuse_darwin_get_reply_buf(char **buf, size_t *size);
+#endif
+
 /**
  * Get the current supplementary group IDs for the current request
  *

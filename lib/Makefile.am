@@ -10,7 +10,7 @@ if DARWIN
 AM_CPPFLAGS += -O -gdwarf-2
 target_source =            	\
 	fuse_darwin.c		\
-	fuse_socket_chan.c	\
+	fuse_darwin_chan.c	\
 	modules/threadid.c   	\
 	modules/volicon.c	\
 	mount_darwin.c

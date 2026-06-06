@@ -1765,6 +1765,23 @@ void fuse_session_process_buf(struct fuse_session *se,
 int fuse_session_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 			     struct fuse_chan **chp);
 
+#ifdef __APPLE__
+/**
+ * Get the reply buffer of a request, if available.
+ *
+ * This is useful for a file system that wants to write reply payload bytes
+ * directly into transport-provided storage and avoid an extra copy. The
+ * returned buffer is borrowed from the request and remains valid only until
+ * the request is replied to.
+ *
+ * @param req the request
+ * @param buf pointer to the reply buffer
+ * @param size size of the reply buffer
+ * @return 0 on success, -errno on failure
+ */
+int fuse_darwin_req_get_reply_buf(fuse_req_t req, char **buf, size_t *size);
+#endif
+
 /**
  * Destroy a session
  *

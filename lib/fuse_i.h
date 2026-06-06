@@ -15,6 +15,7 @@
 
 #ifdef __APPLE__
 #  include <DiskArbitration/DiskArbitration.h>
+#  include <MFMount/MFMount.h>
 #endif
 
 struct fuse_chan;
@@ -54,6 +55,9 @@ struct fuse_req {
 			void *data;
 		} ni;
 	} u;
+#ifdef __APPLE__
+    MFMessageRef mfmsg;
+#endif
 	struct fuse_req *next;
 	struct fuse_req *prev;
 };
@@ -110,14 +114,16 @@ int fuse_sync_compat_args(struct fuse_args *args);
 struct fuse_chan *fuse_kern_chan_new(int fd);
 
 #ifdef __APPLE__
-struct fuse_chan *fuse_socket_chan_new(int fd);
+struct fuse_chan *fuse_darwin_chan_new(MFChannelRef channel);
 #endif
 
 struct fuse_session *fuse_lowlevel_new_common(struct fuse_args *args,
 					const struct fuse_lowlevel_ops *op,
 					size_t op_size, void *userdata);
 
+#ifndef __APPLE__
 void fuse_kern_unmount_compat22(const char *mountpoint);
+#endif
 
 #ifdef __APPLE__
 void fuse_chan_retain(struct fuse_chan *ch);
@@ -128,15 +134,14 @@ int fuse_chan_clearfd(struct fuse_chan *ch);
 
 #ifdef __APPLE__
 void fuse_chan_set_disk(struct fuse_chan *ch, DADiskRef disk);
-void fuse_kern_unmount(DADiskRef disk, int fd);
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options);
 #else
 void fuse_kern_unmount(const char *mountpoint, int fd);
 #endif
 
 #ifdef __APPLE__
-int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
-		    void (*callback)(void *, int),
-		    void *context);
+MFChannelRef fuse_darwin_mount(const char *mountpoint, struct fuse_args *args,
+			       void (*callback)(void *, int), void *context);
 #else
 int fuse_kern_mount(const char *mountpoint, struct fuse_args *args);
 #endif

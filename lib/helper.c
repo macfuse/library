@@ -33,6 +33,7 @@
 #ifdef __APPLE__
 #  include <CoreFoundation/CoreFoundation.h>
 #  include <DiskArbitration/DiskArbitration.h>
+#  include <MFMount/MFMount.h>
 #endif
 
 enum  {
@@ -320,7 +321,7 @@ static void fuse_mount_callback(void *context, int status)
 
 	if (status != 0) {
 		fprintf(stderr, "fuse: mount failed with error: %d\n", status);
-		goto out;
+		goto err_out;
 	}
 
 	url = CFURLCreateFromFileSystemRepresentation(
@@ -329,10 +330,18 @@ static void fuse_mount_callback(void *context, int status)
 	disk = DADiskCreateFromVolumePath(NULL, fuse_dasession, url);
 	CFRelease(url);
 
-	if (disk) {
-		fuse_chan_set_disk(mc->ch, disk);
-		CFRelease(disk);
+	if (!disk) {
+		fprintf(stderr, "fuse: failed to create DADiskRef\n");
+		goto err_out;
 	}
+
+	fuse_chan_set_disk(mc->ch, disk);
+	CFRelease(disk);
+	goto out;
+
+err_out:
+	fuse_chan_destroy(mc->ch);
+	mc->ch = NULL;
 
 out:
 	pthread_mutex_unlock(&mc->lock);
@@ -357,6 +366,7 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 	struct fuse_chan *ch = NULL;
 	int fd;
 #ifdef __APPLE__
+	MFChannelRef mfch;
 	struct mount_opts mo;
 	struct fuse_mount_context *mc;
 
@@ -379,8 +389,8 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 	mc = fuse_mount_context_new(mountpoint);
 	pthread_mutex_lock(&mc->lock);
 
-	fd = fuse_kern_mount(mountpoint, args, &fuse_mount_callback, mc);
-	if (fd == -1) {
+	mfch = fuse_darwin_mount(mountpoint, args, &fuse_mount_callback, mc);
+	if (!mfch) {
 		pthread_mutex_unlock(&mc->lock);
 
 		/* fuse_mount_callback() is not going to be called */
@@ -388,11 +398,7 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 		goto out;
 	}
 
-	if (mo.backend && strcmp(mo.backend, "fskit") == 0)
-		ch = fuse_socket_chan_new(fd);
-	else
-		ch = fuse_kern_chan_new(fd);
-
+	ch = fuse_darwin_chan_new(mfch);
 	if (ch) {
 		fuse_chan_retain(ch);
 		mc->ch = ch;
@@ -400,10 +406,10 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 		/*
 		 * Note: There is no DADiskRef we could pass to unmount because
 		 * the asynchronous mount operation has not been completed, yet.
-		 * However, we need to make sure fd is closed. As a result the
-		 * mount operation will fail.
+		 * However, we need to make sure the channel is closed.
 		 */
-		fuse_kern_unmount(NULL, fd);
+		MFChannelClose(mfch);
+		MFRelease(mfch);
 	}
 
 	pthread_mutex_unlock(&mc->lock);
@@ -436,12 +442,9 @@ static void fuse_unmount_common(const char *mountpoint, struct fuse_chan *ch)
 	 * completes, we attach a DADiskRef of our volume to the channel.
 	 */
 	if (ch) {
-		/* fuse_chan_disk() returns retained DADiskRef */
 		DADiskRef disk = fuse_chan_disk(ch);
-
-		fuse_kern_unmount(disk, fuse_chan_fd(ch));
-
 		if (disk) {
+			fuse_darwin_unmount(disk, kDADiskUnmountOptionDefault);
 			CFRelease(disk);
 		} else {
 			/* Volume not mounted, destroy the channel */
@@ -684,7 +687,7 @@ void fuse_teardown_compat22(struct fuse *fuse, int fd, char *mountpoint)
 int fuse_mount_compat25(const char *mountpoint, struct fuse_args *args)
 {
 #ifdef __APPLE__
-	return fuse_kern_mount(mountpoint, args, NULL, NULL);
+	return -1;
 #else
 	return fuse_kern_mount(mountpoint, args);
 #endif

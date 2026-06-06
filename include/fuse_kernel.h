@@ -227,6 +227,8 @@ struct fuse_file_lock {
 #define FUSE_DONT_MASK		(1 << 6)
 #define FUSE_FLOCK_LOCKS	(1 << 10)
 #ifdef __APPLE__
+#  define FUSE_REPLY_BUF	(1 << 21)
+#  define FUSE_PAYLOAD_BUF	(1 << 22)
 #  define FUSE_ACCESS_EXTENDED 	(1 << 23)
 #  define FUSE_NODE_RWLOCK	(1 << 24)
 #  define FUSE_RENAME_SWAP	(1 << 25)
@@ -782,5 +784,12 @@ struct fuse_notify_retrieve_in {
 	__u64	dummy3;
 	__u64	dummy4;
 };
+
+#ifdef __APPLE__
+struct fuse_reply_buf_out {
+	__u32    size;
+	__u32    flags;
+};
+#endif
 
 #endif /* _LINUX_FUSE_H */

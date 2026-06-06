@@ -172,6 +172,8 @@ struct fuse_file_info {
 #define FUSE_CAP_FLOCK_LOCKS	(1 << 10)
 #define FUSE_CAP_IOCTL_DIR	(1 << 11)
 #ifdef __APPLE__
+#  define FUSE_CAP_REPLY_BUF		(1 << 21)
+#  define FUSE_CAP_PAYLOAD_BUF		(1 << 22)
 #  define FUSE_CAP_ACCESS_EXTENDED	(1 << 23)
 #  define FUSE_CAP_NODE_RWLOCK		(1 << 24)
 #  define FUSE_CAP_RENAME_SWAP		(1 << 25)
@@ -411,6 +413,33 @@ enum fuse_buf_flags {
 	 * detected.
 	 */
 	FUSE_BUF_FD_RETRY	= (1 << 3),
+
+#ifdef __APPLE__
+	/**
+	 * Buffer contains a message
+	 *
+	 * If this flag is set, the .msg field is valid, otherwise the
+	 * .mem field is valid.
+	 */
+	FUSE_BUF_IS_MSG		= (1 << 4),
+
+	/**
+	 * Buffer contains borrowed memory
+	 *
+	 * If this flag is set, the .mem field points to borrowed memory. The
+	 * memory must not be freed when the buffer is destroyed.
+	 */
+	FUSE_BUF_BORROWED	= (1 << 5),
+
+	/**
+	 * Buffer contains an operation payload
+	 *
+	 * If this flag is set, the .mem field already points to the
+	 * variable-length payload for an operation. The buffer does not include
+	 * structured request data.
+	 */
+	FUSE_BUF_PAYLOAD	= (1 << 6),
+#endif
 };
 
 /**
@@ -461,6 +490,59 @@ enum fuse_buf_copy_flags {
  * Generic data buffer for I/O, extended attributes, etc...  Data may
  * be supplied as a memory pointer or as a file descriptor
  */
+#ifdef __APPLE__
+struct fuse_buf {
+	/**
+	 * Size of data in bytes
+	 */
+	size_t size;
+
+	/**
+	 * Buffer flags
+	 */
+	enum fuse_buf_flags flags;
+
+	/**
+	 * Memory pointer
+	 *
+	 * Used unless FUSE_BUF_IS_FD flag is set.
+	 */
+	void *mem;
+
+	union {
+		/**
+		 * File descriptor and position
+		 *
+		 * Used if FUSE_BUF_IS_FD flag is set
+		 */
+		struct {
+			/**
+			 * File descriptor
+			 *
+			 * Used if FUSE_BUF_IS_FD flag is set.
+			 */
+			int fd;
+
+			/**
+			 * File position
+			 *
+			 * Used if FUSE_BUF_FD_SEEK flag is set.
+			 */
+			off_t pos;
+		};
+
+		/**
+		 * Opaque message pointer. Only used on macOS.
+		 *
+		 * Used if FUSE_BUF_IS_MSG flag is set.
+		 */
+		struct {
+			void *msg;
+			void *mem_orig;
+		};
+	};
+};
+#else
 struct fuse_buf {
 	/**
 	 * Size of data in bytes
@@ -493,6 +575,7 @@ struct fuse_buf {
 	 */
 	off_t pos;
 };
+#endif
 
 /**
  * Data buffer vector
@@ -525,7 +608,22 @@ struct fuse_bufvec {
 };
 
 /* Initialize bufvec with a single buffer of given size */
-#define FUSE_BUFVEC_INIT(size__) 				\
+#ifdef __APPLE__
+#define FUSE_BUFVEC_INIT(size__)				\
+	((struct fuse_bufvec) {					\
+		.count = 1,					\
+		.idx = 0,					\
+		.off = 0,					\
+		.buf[0] = {					\
+			.size = (size__),			\
+			.flags = (enum fuse_buf_flags)0,	\
+			.mem = NULL,				\
+			.fd = -1,				\
+			.pos = 0,				\
+		}						\
+	} )
+#else
+#define FUSE_BUFVEC_INIT(size__)				\
 	((struct fuse_bufvec) {					\
 		/* .count= */ 1,				\
 		/* .idx =  */ 0,				\
@@ -538,6 +636,7 @@ struct fuse_bufvec {
 			/* .pos =   */ 0,			\
 		} }						\
 	} )
+#endif
 
 /**
  * Get total size of data in a fuse buffer vector

@@ -179,6 +179,9 @@ static void list_add_req(struct fuse_req *req, struct fuse_req *next)
 static void destroy_req(fuse_req_t req)
 {
 	pthread_mutex_destroy(&req->lock);
+#ifdef __APPLE__
+	MFRelease(req->mfmsg);
+#endif
 	free(req);
 }
 
@@ -854,12 +857,78 @@ static int fuse_send_data_iov(struct fuse_ll *f, struct fuse_chan *ch,
 }
 #endif
 
+#ifdef __APPLE__
+static int fuse_reply_data_mfch(fuse_req_t req, struct fuse_bufvec *bufv,
+				enum fuse_buf_copy_flags flags)
+{
+	ssize_t res;
+	struct iovec iov[2];
+	struct fuse_out_header out;
+	void *reply_buf;
+
+	assert(req->mfmsg != NULL);
+
+	iov[0].iov_base = &out;
+	iov[0].iov_len = sizeof(struct fuse_out_header);
+
+	out.unique = req->unique;
+	out.error = 0;
+
+	res = MFMessageGetReplyBuffer(req->mfmsg, &reply_buf);
+	if (res == 0) {
+		res = fuse_send_data_iov(req->f, req->ch, iov, 1, bufv,
+					 flags);
+		if (res <= 0) {
+			fuse_free_req(req);
+			return res;
+		} else {
+			return fuse_reply_err(req, res);
+		}
+	}
+	if (res > 0) {
+		size_t reply_buf_size = res;
+		size_t bufv_size;
+		struct fuse_bufvec dbufv = FUSE_BUFVEC_INIT(reply_buf_size);
+		struct fuse_reply_buf_out reply_buf_out;
+
+		bufv_size = fuse_buf_size(bufv);
+		if (bufv_size > reply_buf_size) {
+			fprintf(stderr, "fuse: reply buffer too small\n");
+			return fuse_reply_err(req, EIO);
+		}
+
+		dbufv.buf[0].mem = reply_buf;
+		res = fuse_buf_copy(&dbufv, bufv, flags);
+		if (res < 0)
+			return fuse_reply_err(req, -res);
+		if ((size_t)res != bufv_size) {
+			fprintf(stderr, "fuse: short copy to reply buffer\n");
+			return fuse_reply_err(req, EIO);
+		}
+
+		iov[1].iov_base = &reply_buf_out;
+		iov[1].iov_len = sizeof(struct fuse_reply_buf_out);
+
+		reply_buf_out.size = (uint32_t)res;
+		reply_buf_out.flags = 0;
+
+		return send_reply_iov(req, 0, iov, 2);
+	}
+	return fuse_reply_err(req, errno ? errno : EIO);
+}
+#endif
+
 int fuse_reply_data(fuse_req_t req, struct fuse_bufvec *bufv,
 		    enum fuse_buf_copy_flags flags)
 {
 	struct iovec iov[2];
 	struct fuse_out_header out;
 	int res;
+
+#ifdef __APPLE__
+	if (req->mfmsg != NULL)
+		return fuse_reply_data_mfch(req, bufv, flags);
+#endif
 
 	iov[0].iov_base = &out;
 	iov[0].iov_len = sizeof(struct fuse_out_header);
@@ -1432,23 +1501,20 @@ static void do_read(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		fuse_reply_err(req, ENOSYS);
 }
 
-static void do_write(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+static void _do_write(fuse_req_t req, fuse_ino_t nodeid, const void *inarg,
+		      const char *param)
 {
 	struct fuse_write_in *arg = (struct fuse_write_in *) inarg;
 	struct fuse_file_info fi;
-	char *param;
 
 	memset(&fi, 0, sizeof(fi));
 	fi.fh = arg->fh;
 	fi.fh_old = fi.fh;
 	fi.writepage = arg->write_flags & 1;
 
-	if (req->f->conn.proto_minor < 9) {
-		param = ((char *) arg) + FUSE_COMPAT_WRITE_IN_SIZE;
-	} else {
+	if (req->f->conn.proto_minor >= 9) {
 		fi.lock_owner = arg->lock_owner;
 		fi.flags = arg->flags;
-		param = PARAM(arg);
 	}
 
 	if (req->f->op.write)
@@ -1456,6 +1522,19 @@ static void do_write(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 				 arg->offset, &fi);
 	else
 		fuse_reply_err(req, ENOSYS);
+}
+
+static void do_write(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	struct fuse_write_in *arg = (struct fuse_write_in *) inarg;
+	char *param;
+
+	if (req->f->conn.proto_minor < 9)
+		param = ((char *) arg) + FUSE_COMPAT_WRITE_IN_SIZE;
+	else
+		param = PARAM(arg);
+
+	_do_write(req, nodeid, inarg, param);
 }
 
 static void do_write_buf(fuse_req_t req, fuse_ino_t nodeid, const void *inarg,
@@ -1474,19 +1553,27 @@ static void do_write_buf(fuse_req_t req, fuse_ino_t nodeid, const void *inarg,
 	fi.fh_old = fi.fh;
 	fi.writepage = arg->write_flags & 1;
 
+#ifdef __APPLE__
+	if (!(bufv.buf[0].flags & FUSE_BUF_PAYLOAD)) {
+#endif
 	if (req->f->conn.proto_minor < 9) {
 		bufv.buf[0].mem = ((char *) arg) + FUSE_COMPAT_WRITE_IN_SIZE;
 		bufv.buf[0].size -= sizeof(struct fuse_in_header) +
 			FUSE_COMPAT_WRITE_IN_SIZE;
 		assert(!(bufv.buf[0].flags & FUSE_BUF_IS_FD));
 	} else {
-		fi.lock_owner = arg->lock_owner;
-		fi.flags = arg->flags;
 		if (!(bufv.buf[0].flags & FUSE_BUF_IS_FD))
 			bufv.buf[0].mem = PARAM(arg);
 
 		bufv.buf[0].size -= sizeof(struct fuse_in_header) +
 			sizeof(struct fuse_write_in);
+	}
+#ifdef __APPLE__
+	}
+#endif
+	if (req->f->conn.proto_minor >= 9) {
+		fi.lock_owner = arg->lock_owner;
+		fi.flags = arg->flags;
 	}
 	if (bufv.buf[0].size < arg->size) {
 		fprintf(stderr, "fuse: do_write_buf: buffer size too small\n");
@@ -1997,6 +2084,10 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		if (arg->flags & FUSE_FLOCK_LOCKS)
 			f->conn.capable |= FUSE_CAP_FLOCK_LOCKS;
 #ifdef __APPLE__
+		if (arg->flags & FUSE_REPLY_BUF)
+			f->conn.capable |= FUSE_CAP_REPLY_BUF;
+		if (arg->flags & FUSE_PAYLOAD_BUF)
+			f->conn.capable |= FUSE_CAP_PAYLOAD_BUF;
 		if (arg->flags & FUSE_ACCESS_EXTENDED)
 			f->conn.capable |= FUSE_CAP_ACCESS_EXTENDED;
 		if (arg->flags & FUSE_NODE_RWLOCK)
@@ -2047,6 +2138,10 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	if (f->big_writes)
 		f->conn.want |= FUSE_CAP_BIG_WRITES;
 #ifdef __APPLE__
+	if (f->conn.capable & FUSE_CAP_REPLY_BUF)
+		f->conn.want |= FUSE_CAP_REPLY_BUF;
+	if (f->conn.capable & FUSE_CAP_PAYLOAD_BUF)
+		f->conn.want |= FUSE_CAP_PAYLOAD_BUF;
 	if (f->op.renamex)
 		f->conn.want |= FUSE_CAP_RENAME_SWAP | FUSE_CAP_RENAME_EXCL;
 	if (f->op.fallocate)
@@ -2095,6 +2190,10 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	if (f->conn.want & FUSE_CAP_FLOCK_LOCKS)
 		outarg.flags |= FUSE_FLOCK_LOCKS;
 #ifdef __APPLE__
+	if (f->conn.want & FUSE_CAP_REPLY_BUF)
+		outarg.flags |= FUSE_REPLY_BUF;
+	if (f->conn.want & FUSE_CAP_PAYLOAD_BUF)
+		outarg.flags |= FUSE_PAYLOAD_BUF;
 	if (f->conn.want & FUSE_CAP_ACCESS_EXTENDED)
 		outarg.flags |= FUSE_ACCESS_EXTENDED;
 	if (f->conn.want & FUSE_CAP_NODE_RWLOCK)
@@ -2382,11 +2481,17 @@ static void fuse_ll_retrieve_reply(struct fuse_notify_req *nreq,
 		.count = 1,
 	};
 
+#ifdef __APPLE__
+	if (!(bufv.buf[0].flags & FUSE_BUF_PAYLOAD)) {
+#endif
 	if (!(bufv.buf[0].flags & FUSE_BUF_IS_FD))
 		bufv.buf[0].mem = PARAM(arg);
 
 	bufv.buf[0].size -= sizeof(struct fuse_in_header) +
 		sizeof(struct fuse_notify_retrieve_in);
+#ifdef __APPLE__
+	}
+#endif
 
 	if (bufv.buf[0].size < arg->size) {
 		fprintf(stderr, "fuse: retrieve reply: buffer size too small\n");
@@ -2505,6 +2610,27 @@ int fuse_req_interrupted(fuse_req_t req)
 	return interrupted;
 }
 
+#ifdef __APPLE__
+int fuse_darwin_req_get_reply_buf(fuse_req_t req, char **buf, size_t *size)
+{
+	ssize_t res;
+	void *reply_buf;
+
+	if (req->mfmsg == NULL)
+		return -EINVAL;
+
+	res = MFMessageGetReplyBuffer(req->mfmsg, &reply_buf);
+	if (res == -1)
+		return errno ? -errno : -EIO;
+	if (res == 0)
+		return -EINVAL;
+
+	*buf = reply_buf;
+	*size = res;
+	return 0;
+}
+#endif
+
 static struct {
 	void (*func)(fuse_req_t, fuse_ino_t, const void *);
 	const char *name;
@@ -2588,6 +2714,11 @@ static void fuse_ll_process_buf(void *data, const struct fuse_buf *buf,
 				struct fuse_chan *ch)
 {
 	struct fuse_ll *f = (struct fuse_ll *) data;
+#ifdef __APPLE__
+	MFMessageRef mfmsg = NULL;
+	void *mem_orig;
+	struct fuse_buf pbuf = {0};
+#endif
 	const size_t write_header_size = sizeof(struct fuse_in_header) +
 		sizeof(struct fuse_write_in);
 	struct fuse_bufvec bufv = { .buf[0] = *buf, .count = 1 };
@@ -2599,6 +2730,37 @@ static void fuse_ll_process_buf(void *data, const struct fuse_buf *buf,
 	int err;
 	int res;
 
+#ifdef __APPLE__
+	if (buf->flags & FUSE_BUF_IS_MSG) {
+		struct fuse_buf *_buf = (struct fuse_buf *)buf;
+
+		ssize_t body_count = 0;
+		const struct iovec *body_bufs = NULL;
+
+		mfmsg = _buf->msg;
+		mem_orig = _buf->mem_orig;
+		_buf->flags &= ~FUSE_BUF_IS_MSG;
+		_buf->msg = NULL;
+		_buf->mem_orig = NULL;
+
+		if (mfmsg == NULL) {
+			fprintf(stderr, "fuse: invalid message body\n");
+			goto out_free;
+		}
+
+		body_count = MFMessageGetBodyBuffers(mfmsg, &body_bufs);
+		if (body_count == 2) {
+			pbuf.size = body_bufs[1].iov_len;
+			pbuf.flags = FUSE_BUF_BORROWED | FUSE_BUF_PAYLOAD;
+			pbuf.mem = body_bufs[1].iov_base;
+		} else if (body_count != 1) {
+			fprintf(stderr, "fuse: invalid message body\n");
+			goto out_free;
+		}
+
+		in = body_bufs[0].iov_base;
+	} else
+#endif
 	if (buf->flags & FUSE_BUF_IS_FD) {
 		if (buf->size < tmpbuf.buf[0].size)
 			tmpbuf.buf[0].size = buf->size;
@@ -2647,6 +2809,9 @@ static void fuse_ll_process_buf(void *data, const struct fuse_buf *buf,
 	req->ctx.gid = in->gid;
 	req->ctx.pid = in->pid;
 	req->ch = ch;
+#ifdef __APPLE__
+	req->mfmsg = mfmsg ? MFRetain(mfmsg) : NULL;
+#endif
 
 	err = EIO;
 	if (!f->got_init) {
@@ -2703,6 +2868,21 @@ static void fuse_ll_process_buf(void *data, const struct fuse_buf *buf,
 	}
 
 	inarg = (void *) &in[1];
+#ifdef __APPLE__
+	if (pbuf.size > 0) {
+		if (in->opcode == FUSE_WRITE) {
+			if (f->op.write_buf)
+				do_write_buf(req, in->nodeid, inarg, &pbuf);
+			else
+				_do_write(req, in->nodeid, inarg, pbuf.mem);
+		} else if (in->opcode == FUSE_NOTIFY_REPLY) {
+			do_notify_reply(req, in->nodeid, inarg, &pbuf);
+		} else {
+			err = EIO;
+			goto reply_err;
+		}
+	} else
+#endif
 	if (in->opcode == FUSE_WRITE && f->op.write_buf)
 		do_write_buf(req, in->nodeid, inarg, buf);
 	else if (in->opcode == FUSE_NOTIFY_REPLY)
@@ -2711,6 +2891,15 @@ static void fuse_ll_process_buf(void *data, const struct fuse_buf *buf,
 		fuse_ll_ops[in->opcode].func(req, in->nodeid, inarg);
 
 out_free:
+#ifdef __APPLE__
+	if (mfmsg != NULL) {
+		struct fuse_buf *_buf = (struct fuse_buf *)buf;
+		_buf->flags &= ~FUSE_BUF_BORROWED;
+		_buf->mem = mem_orig;
+
+		MFRelease(mfmsg);
+	}
+#endif
 	free(mbuf);
 	return;
 
@@ -2845,6 +3034,78 @@ static void fuse_ll_pipe_destructor(void *data)
 	fuse_ll_pipe_free(llp);
 }
 
+#ifdef __APPLE__
+static int fuse_ll_receive_buf_mfch(struct fuse_session *se,
+				    struct fuse_buf *buf,
+				    MFChannelRef mfch)
+{
+	int err;
+	ssize_t res;
+	MFMessageRef mfmsg;
+	ssize_t body_count;
+	const struct iovec *body_bufs = NULL;
+
+restart:
+	mfmsg = MFChannelCopyNextMessage(mfch);
+	if (mfmsg == NULL) {
+		res = -1;
+	} else {
+		res = MFMessageGetBodySize(mfmsg);
+		if (res == -1) {
+			MFRelease(mfmsg);
+			mfmsg = NULL;
+		}
+	}
+	err = errno;
+
+	if (fuse_session_exited(se)) {
+		if (mfmsg != NULL)
+			MFRelease(mfmsg);
+		return 0;
+	}
+	if (res == -1) {
+		/* ENOENT means the operation was interrupted, it's safe
+		   to restart */
+		if (err == ENOENT)
+			goto restart;
+
+		/* Filesystem was unmounted, or connection was aborted */
+		if (err == ENODEV) {
+			fuse_session_exit(se);
+			return 0;
+		}
+
+		/* Errors occurring during normal operation: EINTR (read
+		   interrupted), EAGAIN (nonblocking I/O), ENODEV (filesystem
+		   umounted) */
+		if (err != EINTR && err != EAGAIN)
+			perror("fuse: reading channel");
+		return -err;
+	}
+
+	if ((size_t)res < sizeof(struct fuse_in_header)) {
+		fprintf(stderr, "short read on fuse channel\n");
+		MFRelease(mfmsg);
+		return -EIO;
+	}
+
+	body_count = MFMessageGetBodyBuffers(mfmsg, &body_bufs);
+	if (body_count < 1 || body_count > 2) {
+		fprintf(stderr, "fuse: invalid message body\n");
+		MFRelease(mfmsg);
+		return -EIO;
+	}
+
+	buf->size = res;
+	buf->flags = FUSE_BUF_IS_MSG | FUSE_BUF_BORROWED;
+	buf->msg = mfmsg;
+	buf->mem_orig = buf->mem;
+	buf->mem = body_bufs[0].iov_base;
+
+	return res;
+}
+#endif
+
 #ifdef HAVE_SPLICE
 static int fuse_ll_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 			       struct fuse_chan **chp)
@@ -2947,9 +3208,19 @@ fallback:
 static int fuse_ll_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 			       struct fuse_chan **chp)
 {
-	(void) se;
+	int res;
 
-	int res = fuse_chan_recv(chp, buf->mem, buf->size);
+#ifdef __APPLE__
+	struct fuse_chan *ch = *chp;
+	MFChannelRef mfch = (MFChannelRef)fuse_chan_data(ch);
+
+	if (mfch != NULL)
+		return fuse_ll_receive_buf_mfch(se, buf, mfch);
+#else
+	(void) se;
+#endif
+
+	res = fuse_chan_recv(chp, buf->mem, buf->size);
 	if (res <= 0)
 		return res;
 
@@ -2958,7 +3229,6 @@ static int fuse_ll_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 	return res;
 }
 #endif
-
 
 /*
  * always call fuse_lowlevel_new_common() internally, to work around a

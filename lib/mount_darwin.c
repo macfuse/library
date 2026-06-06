@@ -264,20 +264,10 @@ static int fuse_mount_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-void fuse_kern_unmount(DADiskRef disk, int fd)
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options)
 {
-	if (!disk) {
-		/*
-		 * Filesystem has already been unmounted or has never been
-		 * mounted in the first place, all we need to do is make sure
-		 * that fd is closed.
-		 */
-		if (fd != -1)
-			close(fd);
-		return;
-	}
-
-	DADiskUnmount(disk, kDADiskUnmountOptionDefault, NULL, NULL);
+	if (disk)
+		DADiskUnmount(disk, options, NULL, NULL);
 }
 
 void fuse_unmount_compat22(const char *mountpoint)
@@ -503,7 +493,7 @@ out:
 struct fuse_mount_ext_arg {
 	char *mountpoint;
 	char *options;
-	int socket;
+	MFChannelRef channel;
 	void (*callback)(void *context, int res);
 	void *context;
 };
@@ -513,45 +503,40 @@ static void *fuse_mount_ext_bg(void *arg)
 	struct fuse_mount_ext_arg *a = (struct fuse_mount_ext_arg *)arg;
 	int res = -1;
 
-	res = MFMount(a->mountpoint, a->options, quiet_mode, a->socket);
+	res = MFMount(a->channel, a->mountpoint, a->options, quiet_mode);
 	if (a->callback) {
 		a->callback(a->context, res);
 	}
 
-	close(a->socket);
 	free(a->mountpoint);
 	free(a->options);
+	MFRelease(a->channel);
 	free(a);
 
 	return NULL;
 }
 
-static int fuse_mount_ext(const char *mountpoint, struct mount_opts *mo,
-			  void (*callback)(void *, int), void *context)
+static MFChannelRef fuse_mount_ext(const char *mountpoint,
+				   struct mount_opts *mo,
+				   void (*callback)(void *, int), void *context)
 {
 	int res = -1;
-	int fds[2];
 	struct fuse_mount_ext_arg *arg = NULL;
 	pthread_t mount_ext_thread;
 
-	res = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-	if (res == -1) {
-		fprintf(stderr, "fuse: socketpair() failed\n");
-		return -1;
-	}
+	MFChannelRef channel = MFChannelCreate();
 
 	arg = calloc(1, sizeof(struct fuse_mount_ext_arg));
 	if (!arg) {
 		fprintf(stderr,
 			"fuse: failed to allocate fuse_mount_ext_arg\n");
-		close(fds[0]);
-		close(fds[1]);
-		return -1;
+		MFRelease(channel);
+		return NULL;
 	}
 
 	arg->mountpoint = strdup(mountpoint);
 	arg->options = strdup(mo->kernel_opts);
-	arg->socket = fds[1];
+	arg->channel = MFRetain(channel);
 	arg->callback = callback;
 	arg->context = context;
 
@@ -559,13 +544,11 @@ static int fuse_mount_ext(const char *mountpoint, struct mount_opts *mo,
 		fprintf(stderr,
 			"fuse: failed to initialize fuse_mount_ext_arg\n");
 
-		close(fds[0]);
-		close(fds[1]);
-
 		free(arg->mountpoint);
 		free(arg->options);
+		MFRelease(arg->channel);
 		free(arg);
-		return -1;
+		return NULL;
 	}
 
 	res = fuse_start_thread(&mount_ext_thread,
@@ -573,24 +556,22 @@ static int fuse_mount_ext(const char *mountpoint, struct mount_opts *mo,
 	if (res) {
 		fprintf(stderr, "fuse: failed to mount volume\n");
 
-		close(fds[0]);
-		close(fds[1]);
-
 		free(arg->mountpoint);
 		free(arg->options);
+		MFRelease(arg->channel);
 		free(arg);
-		return -1;
+		return NULL;
 	}
 
 	pthread_detach(mount_ext_thread);
-	return fds[0];
+	return channel;
 }
 
-int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
-		    void (*callback)(void *, int), void *context)
+MFChannelRef fuse_darwin_mount(const char *mountpoint, struct fuse_args *args,
+			       void (*callback)(void *, int), void *context)
 {
 	struct mount_opts mo;
-	int res = -1;
+	MFChannelRef mfch = NULL;
 
 	memset(&mo, 0, sizeof(mo));
 
@@ -599,7 +580,7 @@ int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
 
 	if (args && fuse_opt_parse(args, &mo, fuse_mount_opts,
 				   fuse_mount_opt_proc) == -1) {
-		return -1;
+		return NULL;
 	}
 
 	if (mo.allow_other && mo.allow_root) {
@@ -609,18 +590,23 @@ int fuse_kern_mount(const char *mountpoint, struct fuse_args *args,
 	}
 
 	if (mo.ishelp) {
-		res = 0;
 		goto out;
 	}
 
 	if (mo.backend && strcmp(mo.backend, "fskit") == 0) {
-		res = fuse_mount_ext(mountpoint, &mo, callback, context);
+		mfch = fuse_mount_ext(mountpoint, &mo, callback, context);
 	} else {
-		res = fuse_mount_core(mountpoint, &mo, callback, context);
+		int fd = fuse_mount_core(mountpoint, &mo, callback, context);
+		if (fd < 0)
+			goto out;
+
+		mfch = MFChannelCreateWithDeviceFileDescriptor(fd);
+		if (mfch == NULL)
+			close(fd);
 	}
 
 out:
 	free(mo.kernel_opts);
 	free(mo.backend);
-	return res;
+	return mfch;
 }
