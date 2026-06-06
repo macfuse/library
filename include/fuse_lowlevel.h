@@ -2,7 +2,7 @@
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (C) 2006-2008  Amit Singh / Google Inc.
-  Copyright (C) 2011-2025  Benjamin Fleischer
+  Copyright (C) 2011-2026  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt.
@@ -2503,6 +2503,23 @@ void fuse_session_process_buf(struct fuse_session *se,
  * @return the actual size of the raw request, or -errno on error
  */
 int fuse_session_receive_buf(struct fuse_session *se, struct fuse_buf *buf);
+
+#ifdef __APPLE__
+/**
+ * Get the reply buffer of a request, if available.
+ *
+ * This is useful for a file system that wants to write reply payload bytes
+ * directly into transport-provided storage and avoid an extra copy. The
+ * returned buffer is borrowed from the request and remains valid only until
+ * the request is replied to.
+ *
+ * @param req the request
+ * @param buf pointer to the reply buffer
+ * @param size size of the reply buffer
+ * @return 0 on success, -errno on failure
+ */
+int fuse_darwin_req_get_reply_buf(fuse_req_t req, char **buf, size_t *size);
+#endif
 
 /**
  * Check if the request is submitted through fuse-io-uring

@@ -1,7 +1,7 @@
 /*  FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (C) 2006-2008  Amit Singh / Google Inc.
-  Copyright (C) 2011-2025  Benjamin Fleischer
+  Copyright (C) 2011-2026  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt.
@@ -573,6 +573,8 @@ struct fuse_loop_config_v1 {
 #define FUSE_DARWIN_CAP_RENAME_EXT (1 << 3)
 #define FUSE_DARWIN_CAP_FALLOCATE (1 << 4)
 #define FUSE_DARWIN_CAP_SETVOLNAME (1 << 5)
+#define FUSE_DARWIN_CAP_PAYLOAD_BUF (1 << 6)
+#define FUSE_DARWIN_CAP_REPLY_BUF (1 << 7)
 #endif
 
 /**
@@ -946,7 +948,34 @@ enum fuse_buf_flags {
 	 * until .size bytes have been copied or an error or EOF is
 	 * detected.
 	 */
-	FUSE_BUF_FD_RETRY	= (1 << 3)
+	FUSE_BUF_FD_RETRY	= (1 << 3),
+
+#ifdef __APPLE__
+	/**
+	 * Buffer contains a message
+	 *
+	 * If this flag is set, the .msg field is valid, otherwise the
+	 * .mem field is valid.
+	 */
+	FUSE_BUF_IS_MSG		= (1 << 4),
+
+	/**
+	 * Buffer contains borrowed memory
+	 *
+	 * If this flag is set, the .mem field points to borrowed memory. The
+	 * memory must not be freed when the buffer is destroyed.
+	 */
+	FUSE_BUF_BORROWED	= (1 << 5),
+
+	/**
+	 * Buffer contains an operation payload
+	 *
+	 * If this flag is set, the .mem field already points to the
+	 * variable-length payload for an operation. The buffer does not include
+	 * structured request data.
+	 */
+	FUSE_BUF_PAYLOAD	= (1 << 6)
+#endif
 };
 
 /**
@@ -997,6 +1026,67 @@ enum fuse_buf_copy_flags {
  * Generic data buffer for I/O, extended attributes, etc...  Data may
  * be supplied as a memory pointer or as a file descriptor
  */
+#ifdef __APPLE__
+struct fuse_buf {
+	/**
+	 * Size of data in bytes
+	 */
+	size_t size;
+
+	/**
+	 * Buffer flags
+	 */
+	enum fuse_buf_flags flags;
+
+	/**
+	 * Memory pointer
+	 *
+	 * Used unless FUSE_BUF_IS_FD flag is set.
+	 */
+	void *mem;
+
+	union {
+		/**
+		 * File descriptor and position
+		 *
+		 * Used if FUSE_BUF_IS_FD flag is set
+		 */
+		struct {
+			/**
+			 * File descriptor
+			 *
+			 * Used if FUSE_BUF_IS_FD flag is set.
+			 */
+			int fd;
+
+			/**
+			 * File position
+			 *
+			 * Used if FUSE_BUF_FD_SEEK flag is set.
+			 */
+			off_t pos;
+		};
+
+		/**
+		 * Opaque message pointer. Only used on macOS.
+		 *
+		 * Used if FUSE_BUF_IS_MSG flag is set
+		 */
+		struct {
+			void *msg;
+			void *mem_orig;
+		};
+	};
+
+	/**
+	 * Size of memory pointer
+	 *
+	 * Used only if mem was internally allocated.
+	 * Not used if mem was user-provided.
+	 */
+	size_t mem_size;
+};
+#else
 struct fuse_buf {
 	/**
 	 * Size of data in bytes
@@ -1037,6 +1127,7 @@ struct fuse_buf {
 	 */
 	size_t mem_size;
 };
+#endif
 
 /**
  * Data buffer vector
@@ -1086,6 +1177,22 @@ struct libfuse_version
 };
 
 /* Initialize bufvec with a single buffer of given size */
+#ifdef __APPLE__
+#define FUSE_BUFVEC_INIT(size__)				\
+	((struct fuse_bufvec) {					\
+		.count = 1,					\
+		.idx = 0,					\
+		.off = 0,					\
+		.buf[0] = {					\
+			.size = (size__),			\
+			.flags = (enum fuse_buf_flags)0,	\
+			.mem = NULL,				\
+			.fd = -1,				\
+			.pos = 0,				\
+			.mem_size = 0,				\
+		}						\
+	} )
+#else
 #define FUSE_BUFVEC_INIT(size__)				\
 	((struct fuse_bufvec) {					\
 		/* .count= */ 1,				\
@@ -1100,6 +1207,7 @@ struct libfuse_version
 			/* .mem_size = */ 0,                    \
 		} }						\
 	} )
+#endif
 
 /**
  * Get total size of data in a fuse buffer vector

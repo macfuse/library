@@ -2,7 +2,7 @@
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (C) 2006-2008  Amit Singh / Google Inc.
-  Copyright (C) 2011-2025  Benjamin Fleischer
+  Copyright (C) 2011-2026  Benjamin Fleischer
 
   Implementation of the high-level FUSE API on top of the low-level
   API.
@@ -50,6 +50,8 @@
 #include <sys/file.h>
 
 #ifdef __APPLE__
+#include <MFMount/MFMount.h>
+
 /*
  * File names are not always passed to libfuse in a consistent Unicode
  * representation. This means that we need to normalize file names (convert them
@@ -1954,9 +1956,22 @@ static void fuse_free_buf(struct fuse_bufvec *buf)
 	if (buf != NULL) {
 		size_t i;
 
+#ifdef __APPLE__
+		for (i = 0; i < buf->count; i++) {
+			if (buf->buf[i].flags & FUSE_BUF_IS_MSG) {
+				MFRelease(buf->buf[i].msg);
+				if (buf->buf[i].mem_orig != NULL)
+					free(buf->buf[i].mem_orig);
+			}
+			if (!(buf->buf[i].flags & FUSE_BUF_IS_FD) &&
+			    !(buf->buf[i].flags & FUSE_BUF_BORROWED))
+				free(buf->buf[i].mem);
+		}
+#else
 		for (i = 0; i < buf->count; i++)
 			if (!(buf->buf[i].flags & FUSE_BUF_IS_FD))
 				free(buf->buf[i].mem);
+#endif
 		free(buf);
 	}
 }
@@ -1982,11 +1997,27 @@ int fuse_fs_read_buf(struct fuse_fs *fs, const char *path,
 	} else {
 		struct fuse_bufvec *buf;
 		void *mem;
+#ifdef __APPLE__
+		size_t mem_size;
+#endif
 
 		buf = malloc(sizeof(struct fuse_bufvec));
 		if (buf == NULL)
 			return -ENOMEM;
 
+#ifdef __APPLE__
+		res = fuse_darwin_get_reply_buf((char **)&mem, &mem_size);
+		if (res == 0) {
+			if (size > mem_size) {
+				free(buf);
+				return -ENOMEM;
+			}
+
+			*buf = FUSE_BUFVEC_INIT(size);
+			buf->buf[0].flags = FUSE_BUF_BORROWED;
+			buf->buf[0].mem = mem;
+		} else {
+#endif
 		mem = malloc(size);
 		if (mem == NULL) {
 			free(buf);
@@ -1994,6 +2025,9 @@ int fuse_fs_read_buf(struct fuse_fs *fs, const char *path,
 		}
 		*buf = FUSE_BUFVEC_INIT(size);
 		buf->buf[0].mem = mem;
+#ifdef __APPLE__
+		}
+#endif
 		*bufp = buf;
 
 		res = fs->op.read(path, mem, size, off, fi);
@@ -5944,7 +5978,14 @@ static int fuse_session_loop_remember(struct fuse *f)
 		else
 			timeout = 0;
 
+#ifdef __APPLE__
+		if (se->mfch != NULL)
+			res = MFChannelWaitForNextMessage(se->mfch, timeout * 1000);
+		else
+			res = poll(&fds, 1, timeout * 1000);
+#else
 		res = poll(&fds, 1, timeout * 1000);
+#endif
 		if (res == -1) {
 			if (errno == EINTR)
 				continue;
@@ -6046,6 +6087,18 @@ struct fuse_context *fuse_get_context(void)
 	else
 		return NULL;
 }
+
+#ifdef __APPLE__
+int fuse_darwin_get_reply_buf(char **buf, size_t *size)
+{
+	struct fuse_context_i *c = fuse_get_context_internal();
+
+	if (c == NULL || c->req == NULL)
+		return -EINVAL;
+
+	return fuse_darwin_req_get_reply_buf(c->req, buf, size);
+}
+#endif
 
 int fuse_getgroups(int size, gid_t list[])
 {

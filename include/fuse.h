@@ -2,7 +2,7 @@
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (c) 2006-2008  Amit Singh / Google Inc.
-  Copyright (c) 2011-2025  Benjamin Fleischer
+  Copyright (c) 2011-2026  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt.
@@ -1313,6 +1313,22 @@ int fuse_loop_mt(struct fuse *f, struct fuse_loop_config *config);
  */
 struct fuse_context *fuse_get_context(void);
 
+#ifdef __APPLE__
+/**
+ * Get the reply buffer for the current high-level request, if available.
+ *
+ * This is useful for file systems that want to write reply payload bytes
+ * directly into transport-provided storage and avoid an extra copy. The
+ * returned buffer is borrowed from the current request and remains valid only
+ * until the request is replied to.
+ *
+ * @param buf pointer to the reply buffer
+ * @param size size of the reply buffer
+ * @return 0 on success, -errno on failure
+ */
+int fuse_darwin_get_reply_buf(char **buf, size_t *size);
+#endif
+
 /**
  * Get the current supplementary group IDs for the current request
  *
@@ -1598,6 +1614,7 @@ typedef struct fuse_fs *(*fuse_module_factory_t)(struct fuse_args *args,
 /** Get session from fuse object */
 struct fuse_session *fuse_get_session(struct fuse *f);
 
+#ifndef __APPLE__
 /**
  * Open a FUSE file descriptor and set up the mount for the given
  * mountpoint and flags.
@@ -1607,6 +1624,7 @@ struct fuse_session *fuse_get_session(struct fuse *f);
  * @return the FUSE file descriptor or -1 upon error
  */
 int fuse_open_channel(const char *mountpoint, const char *options);
+#endif
 
 #ifdef __cplusplus
 }

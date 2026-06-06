@@ -1,7 +1,7 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
-  Copyright (c) 2025  Benjamin Fleischer
+  Copyright (c) 2025-2026  Benjamin Fleischer
 
   Implementation of the multi-threaded FUSE session loop.
 
@@ -265,8 +265,10 @@ static int fuse_clone_chan_fd_default(struct fuse_session *se)
 	int res;
 	int clonefd;
 
-	clonefd = dup(se->fd);
+	if (se->fd == -1)
+		return -1;
 
+	clonefd = dup(se->fd);
 	res = fcntl(clonefd, F_SETFD, FD_CLOEXEC);
 	if (res == -1) {
 		fuse_log(FUSE_LOG_ERR, "fuse: failed to set CLOEXEC: %s\n",

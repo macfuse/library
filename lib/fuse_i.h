@@ -1,7 +1,7 @@
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
-  Copyright (C) 2017-2025  Benjamin Fleischer
+  Copyright (C) 2017-2026  Benjamin Fleischer
 
   This program can be distributed under the terms of the GNU LGPLv2.
   See the file LGPL2.txt
@@ -25,6 +25,7 @@
 
 #ifdef __APPLE__
 #include <DiskArbitration/DiskArbitration.h>
+#include <MFMount/MFMount.h>
 #endif
 
 #if defined(__APPLE__) && defined(MIN)
@@ -85,6 +86,9 @@ struct fuse_req {
 			void *data;
 		} ni;
 	} u;
+#ifdef __APPLE__
+    MFMessageRef mfmsg;
+#endif
 	struct fuse_req *next;
 	struct fuse_req *prev;
 };
@@ -97,17 +101,6 @@ struct fuse_notify_req {
 	struct fuse_notify_req *prev;
 };
 
-#ifdef __APPLE__
-struct fuse_custom_io_ctx {
-	void *data;
-	void (*destroy)(void *context);
-};
-
-struct fuse_custom_io_ctx *fuse_custom_io_ctx_new(void *data,
-						  void (*destroy)(void *));
-void fuse_custom_io_ctx_destroy(struct fuse_custom_io_ctx *ioc);
-#endif
-
 struct fuse_session_uring {
 	bool enable;
 	unsigned int q_depth;
@@ -118,14 +111,13 @@ struct fuse_session {
 #ifdef __APPLE__
 	int ctr;
 	DADiskRef disk;
+	MFChannelRef mfch;
+	bool mfch_closed;
 #else
 	_Atomic(char *)mountpoint;
 #endif
 	int fd;
 	struct fuse_custom_io *io;
-#ifdef __APPLE__
-	struct fuse_custom_io_ctx *ioc;
-#endif
 	struct mount_opts *mo;
 	int debug;
 	int deny_others;
@@ -285,16 +277,14 @@ void fuse_mount_version(void);
 unsigned get_max_read(struct mount_opts *o);
 
 #ifdef __APPLE__
-void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options, int fd);
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options);
 #else
 void fuse_kern_unmount(const char *mountpoint, int fd);
 #endif
 
 #ifdef __APPLE__
-int fuse_darwin_custom_io(struct mount_opts *mo, struct fuse_custom_io **io,
-			  struct fuse_custom_io_ctx **ioc);
-int fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
-		      void (*callback)(void *, int), void *context);
+MFChannelRef fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
+			       void (*callback)(void *, int), void *context);
 #else
 int fuse_kern_mount(const char *mountpoint, struct mount_opts *mo);
 #endif

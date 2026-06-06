@@ -539,12 +539,14 @@ struct fuse_file_lock {
  * beyond 7.19 on the kernel-side this should not be an issue. We need to clean
  * this up when moving to 7.20 or later.
  */
-#define FUSE_DARWIN_ACCESS_EXT        (1 << 23)
-#define FUSE_DARWIN_THREAD_SAFE        (1 << 24)
-#define FUSE_DARWIN_RENAME_EXT        ((1 << 25) | (1 << 26))
-#define FUSE_DARWIN_FALLOCATE        (1 << 27)
-#define FUSE_DARWIN_CASE_INSENSITIVE    (1 << 29)
-#define FUSE_DARWIN_SETVOLNAME        (1 << 30)
+#define FUSE_DARWIN_REPLY_BUF		(1 << 21)
+#define FUSE_DARWIN_PAYLOAD_BUF		(1 << 22)
+#define FUSE_DARWIN_ACCESS_EXT		(1 << 23)
+#define FUSE_DARWIN_THREAD_SAFE		(1 << 24)
+#define FUSE_DARWIN_RENAME_EXT		((1 << 25) | (1 << 26))
+#define FUSE_DARWIN_FALLOCATE		(1 << 27)
+#define FUSE_DARWIN_CASE_INSENSITIVE	(1 << 29)
+#define FUSE_DARWIN_SETVOLNAME		(1 << 30)
 #endif
 
 /**
@@ -1411,5 +1413,12 @@ struct fuse_uring_cmd_req {
 	uint16_t qid;
 	uint8_t padding[6];
 };
+
+#ifdef __APPLE__
+struct fuse_reply_buf_out {
+    uint32_t    size;
+    uint32_t    padding;
+};
+#endif
 
 #endif /* _LINUX_FUSE_H */

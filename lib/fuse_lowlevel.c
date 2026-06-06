@@ -2,7 +2,7 @@
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (c) 2006-2008  Amit Singh / Google Inc.
-  Copyright (c) 2011-2025  Benjamin Fleischer
+  Copyright (c) 2011-2026  Benjamin Fleischer
 
   Implementation of (most of) the low-level FUSE API. The session loop
   functions are implemented in separate files.
@@ -50,6 +50,8 @@
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+#include <DiskArbitration/DiskArbitration.h>
+#include <MFMount/MFMount.h>
 #endif
 
 #ifndef F_LINUX_SPECIFIC_BASE
@@ -238,6 +240,9 @@ static void destroy_req(fuse_req_t req)
 	}
 	assert(req->ch == NULL);
 	pthread_mutex_destroy(&req->lock);
+#ifdef __APPLE__
+	MFRelease(req->mfmsg);
+#endif
 	free(req);
 }
 
@@ -285,6 +290,26 @@ static struct fuse_req *fuse_ll_alloc_req(struct fuse_session *se)
 	return req;
 }
 
+#ifdef __APPLE__
+static int fuse_send_msg_mfch(struct fuse_session *se, struct iovec *iov,
+			      int count)
+{
+	ssize_t res;
+	int err;
+
+	res = MFChannelSendMessage(se->mfch, iov, count);
+	if (res == -1) {
+		/* ENOENT means the operation was interrupted */
+		err = errno;
+		if (!fuse_session_exited(se) && err != ENOENT)
+			perror("fuse: writing channel");
+		return -err;
+	}
+
+	return 0;
+}
+#endif
+
 /*
  * Send data to fuse-kernel using an fd of the fuse device.
  */
@@ -299,13 +324,8 @@ static int fuse_write_msg_dev(struct fuse_session *se, struct fuse_chan *ch,
 		/* se->io->writev is never NULL if se->io is not NULL as
 		 * specified by fuse_session_custom_io()
 		 */
-#ifdef __APPLE__
-		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
-				     se->ioc ? se->ioc->data : se->userdata);
-#else
 		res = se->io->writev(ch ? ch->fd : se->fd, iov, count,
 				     se->userdata);
-#endif
 	else
 		res = writev(ch ? ch->fd : se->fd, iov, count);
 
@@ -347,6 +367,11 @@ static int fuse_send_msg(struct fuse_session *se, struct fuse_chan *ch,
 		}
 	}
 
+#if __APPLE__
+	if (se->mfch != NULL)
+		err = fuse_send_msg_mfch(se, iov, count);
+	else
+#endif
 	if (is_uring)
 		err = fuse_send_msg_uring(req, iov, count);
 	else
@@ -787,6 +812,12 @@ int fuse_reply_readlink(fuse_req_t req, const char *linkname)
 
 int fuse_passthrough_open(fuse_req_t req, int fd)
 {
+#ifdef __APPLE__
+	(void)req;
+	(void)fd;
+
+	return -1;
+#else
 	struct fuse_backing_map map = { .fd = fd };
 	int ret;
 
@@ -797,10 +828,17 @@ int fuse_passthrough_open(fuse_req_t req, int fd)
 	}
 
 	return ret;
+#endif
 }
 
 int fuse_passthrough_close(fuse_req_t req, int backing_id)
 {
+#ifdef __APPLE__
+	(void)req;
+	(void)backing_id;
+
+	return -1;
+#else
 	int ret;
 
 	ret = ioctl(req->se->fd, FUSE_DEV_IOC_BACKING_CLOSE, &backing_id);
@@ -808,6 +846,7 @@ int fuse_passthrough_close(fuse_req_t req, int backing_id)
 		fuse_log(FUSE_LOG_ERR, "fuse: passthrough_close: %s\n", strerror(errno));
 
 	return ret;
+#endif
 }
 
 int fuse_reply_open(fuse_req_t req, const struct fuse_file_info *f)
@@ -1245,6 +1284,69 @@ static int fuse_send_data_iov(struct fuse_session *se, struct fuse_chan *ch,
 }
 #endif
 
+#ifdef __APPLE__
+static int fuse_reply_data_mfch(fuse_req_t req, struct fuse_bufvec *bufv,
+				enum fuse_buf_copy_flags flags)
+{
+	ssize_t res;
+	struct iovec iov[2];
+	struct fuse_out_header out;
+	void *reply_buf;
+
+	assert(req->mfmsg != NULL);
+
+	iov[0].iov_base = &out;
+	iov[0].iov_len = sizeof(struct fuse_out_header);
+
+	out.unique = req->unique;
+	out.error = 0;
+
+	res = MFMessageGetReplyBuffer(req->mfmsg, &reply_buf);
+	if (res == 0) {
+		res = fuse_send_data_iov(req->se, req->ch, iov, 1, bufv, flags,
+					 req);
+		if (res <= 0) {
+			fuse_free_req(req);
+			return res;
+		} else {
+			return fuse_reply_err(req, res);
+		}
+	}
+	if (res > 0) {
+		size_t reply_buf_size = res;
+		size_t bufv_size;
+		struct fuse_bufvec dbufv = FUSE_BUFVEC_INIT(reply_buf_size);
+		struct fuse_reply_buf_out reply_buf_out;
+
+		bufv_size = fuse_buf_size(bufv);
+		if (bufv_size > reply_buf_size) {
+			fuse_log(FUSE_LOG_ERR,
+				 "fuse: reply buffer too small\n");
+			return fuse_reply_err(req, EIO);
+		}
+
+		dbufv.buf[0].mem = reply_buf;
+		res = fuse_buf_copy(&dbufv, bufv, flags);
+		if (res < 0)
+			return fuse_reply_err(req, -res);
+		if ((size_t)res != bufv_size) {
+			fuse_log(FUSE_LOG_ERR,
+				 "fuse: short copy to reply buffer\n");
+			return fuse_reply_err(req, EIO);
+		}
+
+		iov[1].iov_base = &reply_buf_out;
+		iov[1].iov_len = sizeof(struct fuse_reply_buf_out);
+
+		reply_buf_out.size = (uint32_t)res;
+		reply_buf_out.padding = 0;
+
+		return send_reply_iov(req, 0, iov, 2);
+	}
+	return fuse_reply_err(req, errno ? errno : EIO);
+}
+#endif
+
 int fuse_reply_data(fuse_req_t req, struct fuse_bufvec *bufv,
 		    enum fuse_buf_copy_flags flags)
 {
@@ -1252,6 +1354,10 @@ int fuse_reply_data(fuse_req_t req, struct fuse_bufvec *bufv,
 	struct fuse_out_header out;
 	int res;
 
+#ifdef __APPLE__
+	if (req->mfmsg != NULL)
+		return fuse_reply_data_mfch(req, bufv, flags);
+#endif
 	if (req->flags.is_uring)
 		return fuse_reply_data_uring(req, bufv, flags);
 
@@ -2128,6 +2234,9 @@ static void do_write_buf(fuse_req_t req, const fuse_ino_t nodeid,
 	};
 	struct fuse_write_in *arg = (struct fuse_write_in *)inarg;
 
+#ifdef __APPLE__
+	if (!(bufv.buf[0].flags & FUSE_BUF_PAYLOAD)) {
+#endif
 	if (se->conn.proto_minor < 9) {
 		bufv.buf[0].mem = ((char *)arg) + FUSE_COMPAT_WRITE_IN_SIZE;
 		bufv.buf[0].size -= sizeof(struct fuse_in_header) +
@@ -2140,6 +2249,9 @@ static void do_write_buf(fuse_req_t req, const fuse_ino_t nodeid,
 		bufv.buf[0].size -= sizeof(struct fuse_in_header) +
 				    sizeof(struct fuse_write_in);
 	}
+#ifdef __APPLE__
+	}
+#endif
 	if (bufv.buf[0].size < arg->size) {
 		fuse_log(FUSE_LOG_ERR,
 			 "fuse: %s: buffer size too small\n", __func__);
@@ -2403,7 +2515,7 @@ static void _do_setxattr(fuse_req_t req, const fuse_ino_t nodeid,
 			}
 
 			req->se->op.setxattr.vanilla(req, nodeid, name, value,
-						     arg->size,arg->flags);
+						     arg->size, arg->flags);
 		} else
 			fuse_reply_err(req, ENOSYS);
 	}
@@ -3114,6 +3226,10 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	se->conn.proto_minor = arg->minor;
 	se->conn.capable_ext = 0;
 	se->conn.want_ext = 0;
+#ifdef __APPLE__
+	se->conn.capable_darwin = 0;
+	se->conn.want_darwin = 0;
+#endif
 
 	memset(&outarg, 0, sizeof(outarg));
 	outarg.major = FUSE_KERNEL_VERSION;
@@ -3216,6 +3332,10 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 			se->conn.capable_ext |= FUSE_CAP_OVER_IO_URING;
 
 #ifdef __APPLE__
+		if (inargflags & FUSE_DARWIN_REPLY_BUF)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_REPLY_BUF;
+		if (inargflags & FUSE_DARWIN_PAYLOAD_BUF)
+			se->conn.capable_darwin |= FUSE_DARWIN_CAP_PAYLOAD_BUF;
 		if (inargflags & FUSE_DARWIN_ACCESS_EXT)
 			se->conn.capable_darwin |= FUSE_DARWIN_CAP_ACCESS_EXT;
 		if (inargflags & FUSE_DARWIN_THREAD_SAFE)
@@ -3285,6 +3405,8 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	} else {
 		LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_CASE_INSENSITIVE);
 	}
+	LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_REPLY_BUF);
+	LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_PAYLOAD_BUF);
 	LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_THREAD_SAFE);
 	LL_DARWIN_SET_DEFAULT(1, FUSE_DARWIN_CAP_RENAME_EXT);
 	LL_DARWIN_SET_DEFAULT(se->op.fallocate, FUSE_DARWIN_CAP_FALLOCATE);
@@ -3419,6 +3541,10 @@ _do_init(fuse_req_t req, const fuse_ino_t nodeid, const void *op_in,
 	 * version 7.19 on the kernel-side this should not be an issue, though.
 	 * We need to clean this up when moving to 7.20 or later.
 	 */
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_REPLY_BUF)
+		outargflags |= FUSE_DARWIN_REPLY_BUF;
+	if (se->conn.want_darwin & FUSE_DARWIN_CAP_PAYLOAD_BUF)
+		outargflags |= FUSE_DARWIN_PAYLOAD_BUF;
 	if (se->conn.want_darwin & FUSE_DARWIN_CAP_ACCESS_EXT)
 		outargflags |= FUSE_DARWIN_ACCESS_EXT;
 	if (se->conn.want_darwin & FUSE_DARWIN_CAP_THREAD_SAFE)
@@ -3805,11 +3931,17 @@ static void fuse_ll_retrieve_reply(struct fuse_notify_req *nreq,
 		.count = 1,
 	};
 
+#ifdef __APPLE__
+	if (!(bufv.buf[0].flags & FUSE_BUF_PAYLOAD)) {
+#endif
 	if (!(bufv.buf[0].flags & FUSE_BUF_IS_FD))
 		bufv.buf[0].mem = PARAM(arg);
 
 	bufv.buf[0].size -= sizeof(struct fuse_in_header) +
 		sizeof(struct fuse_notify_retrieve_in);
+#ifdef __APPLE__
+	}
+#endif
 
 	if (bufv.buf[0].size < arg->size) {
 		fuse_log(FUSE_LOG_ERR, "fuse: retrieve reply: buffer size too small\n");
@@ -3909,11 +4041,47 @@ int fuse_req_interrupted(fuse_req_t req)
 	return interrupted;
 }
 
+#ifdef __APPLE__
+int fuse_darwin_req_get_reply_buf(fuse_req_t req, char **buf, size_t *size)
+{
+	ssize_t res;
+	void *reply_buf;
+
+	if (req->mfmsg == NULL)
+		return -EINVAL;
+
+	res = MFMessageGetReplyBuffer(req->mfmsg, &reply_buf);
+	if (res == -1)
+		return errno ? -errno : -EIO;
+	if (res == 0)
+		return -EINVAL;
+
+	*buf = reply_buf;
+	*size = res;
+	return 0;
+}
+#endif
+
 bool fuse_req_is_uring(fuse_req_t req)
 {
 	return req->flags.is_uring;
 }
 
+#ifdef __APPLE__
+int fuse_req_get_payload(fuse_req_t req, char **payload, size_t *payload_sz,
+			 void **mr)
+{
+	int res;
+
+	res = fuse_darwin_req_get_reply_buf(req, payload, payload_sz);
+	if (res)
+		return res;
+
+	if (mr)
+		*mr = NULL;
+	return 0;
+}
+#else
 #ifndef HAVE_URING
 int fuse_req_get_payload(fuse_req_t req, char **payload, size_t *payload_sz,
 			 void **mr)
@@ -3924,6 +4092,7 @@ int fuse_req_get_payload(fuse_req_t req, char **payload, size_t *payload_sz,
 	(void)mr;
 	return -ENOTSUP;
 }
+#endif
 #endif
 
 static struct {
@@ -3982,7 +4151,9 @@ static struct {
 	[FUSE_SETVOLNAME]  = { do_setvolname,  "SETVOLNAME"  },
 #endif
 	[FUSE_STATX]	   = { do_statx,       "STATX"	     },
+#if !defined(__APPLE__)
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
+#endif
 };
 
 static struct {
@@ -4037,8 +4208,14 @@ static struct {
 	[FUSE_COPY_FILE_RANGE]	= { _do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_COPY_FILE_RANGE_64]	= { _do_copy_file_range_64, "COPY_FILE_RANGE_64" },
 	[FUSE_LSEEK]		= { _do_lseek,		"LSEEK" },
+#ifdef __APPLE__
+	[FUSE_MONITOR]		= { _do_monitor,     	"MONITOR" },
+	[FUSE_SETVOLNAME]	= { _do_setvolname,  	"SETVOLNAME" },
+#endif
 	[FUSE_STATX]		= { _do_statx,		"STATX" },
+#if !defined(__APPLE__)
 	[CUSE_INIT]		= { _cuse_lowlevel_init, "CUSE_INIT" },
+#endif
 };
 
 /*
@@ -4123,30 +4300,6 @@ static int fuse_ll_copy_from_pipe(struct fuse_bufvec *dst,
 	return 0;
 }
 
-#ifdef __APPLE__
-struct fuse_custom_io_ctx *fuse_custom_io_ctx_new(void *data,
-						  void (*destroy)(void *))
-{
-	struct fuse_custom_io_ctx *ioc;
-
-	ioc = malloc(sizeof(struct fuse_custom_io_ctx));
-	if (ioc != NULL) {
-		ioc->data = data;
-		ioc->destroy = destroy;
-	}
-
-	return ioc;
- }
-
-void fuse_custom_io_ctx_destroy(struct fuse_custom_io_ctx *ioc)
-{
-	if (ioc != NULL) {
-		ioc->destroy(ioc->data);
-		free(ioc);
-	}
-}
-#endif
-
 void fuse_session_process_buf(struct fuse_session *se,
 			      const struct fuse_buf *buf)
 {
@@ -4157,6 +4310,11 @@ void fuse_session_process_buf(struct fuse_session *se,
 void fuse_session_process_buf_internal(struct fuse_session *se,
 				  const struct fuse_buf *buf, struct fuse_chan *ch)
 {
+#ifdef __APPLE__
+	MFMessageRef mfmsg = NULL;
+	void *mem_orig;
+	struct fuse_buf pbuf = {0};
+#endif
 	const size_t write_header_size = sizeof(struct fuse_in_header) +
 		sizeof(struct fuse_write_in);
 	struct fuse_bufvec bufv = { .buf[0] = *buf, .count = 1 };
@@ -4168,6 +4326,33 @@ void fuse_session_process_buf_internal(struct fuse_session *se,
 	int err;
 	int res;
 
+#ifdef __APPLE__
+	if (buf->flags & FUSE_BUF_IS_MSG) {
+		struct fuse_buf *_buf = (struct fuse_buf *)buf;
+
+		ssize_t body_count = 0;
+		const struct iovec *body_bufs = NULL;
+
+		mfmsg = _buf->msg;
+		mem_orig = _buf->mem_orig;
+		_buf->flags &= ~FUSE_BUF_IS_MSG;
+		_buf->msg = NULL;
+		_buf->mem_orig = NULL;
+
+		body_count = MFMessageGetBodyBuffers(mfmsg, &body_bufs);
+		if (body_count == 2) {
+			pbuf.size = body_bufs[1].iov_len;
+			pbuf.flags = FUSE_BUF_BORROWED | FUSE_BUF_PAYLOAD;
+			pbuf.mem = body_bufs[1].iov_base;
+		} else if (body_count != 1) {
+			fuse_log(FUSE_LOG_ERR,
+				 "fuse: invalid message body\n");
+			goto out_free;
+		}
+
+		in = body_bufs[0].iov_base;
+	} else
+#endif
 	if (buf->flags & FUSE_BUF_IS_FD) {
 		if (buf->size < tmpbuf.buf[0].size)
 			tmpbuf.buf[0].size = buf->size;
@@ -4215,6 +4400,9 @@ void fuse_session_process_buf_internal(struct fuse_session *se,
 
 	fuse_session_in2req(req, in);
 	req->ch = ch ? fuse_chan_get(ch) : NULL;
+#ifdef __APPLE__
+	req->mfmsg = mfmsg ? MFRetain(mfmsg) : NULL;
+#endif
 
 	err = fuse_req_opcode_sanity_ok(se, in->opcode);
 	if (err)
@@ -4266,6 +4454,21 @@ void fuse_session_process_buf_internal(struct fuse_session *se,
 	}
 
 	inarg = (void *) &in[1];
+#ifdef __APPLE__
+	if (pbuf.size > 0) {
+		if (in->opcode == FUSE_WRITE) {
+			if (se->op.write_buf)
+				do_write_buf(req, in->nodeid, inarg, &pbuf);
+			else
+				_do_write(req, in->nodeid, inarg, pbuf.mem);
+		} else if (in->opcode == FUSE_NOTIFY_REPLY) {
+			do_notify_reply(req, in->nodeid, inarg, &pbuf);
+		} else {
+			err = EIO;
+			goto reply_err;
+		}
+	} else
+#endif
 	if (in->opcode == FUSE_WRITE && se->op.write_buf)
 		do_write_buf(req, in->nodeid, inarg, buf);
 	else if (in->opcode == FUSE_NOTIFY_REPLY)
@@ -4274,6 +4477,15 @@ void fuse_session_process_buf_internal(struct fuse_session *se,
 		fuse_ll_ops[in->opcode].func(req, in->nodeid, inarg);
 
 out_free:
+#ifdef __APPLE__
+	if (mfmsg != NULL) {
+		struct fuse_buf *_buf = (struct fuse_buf *)buf;
+		_buf->flags &= ~FUSE_BUF_BORROWED;
+		_buf->mem = mem_orig;
+
+		MFRelease(mfmsg);
+	}
+#endif
 	free(mbuf);
 	return;
 
@@ -4372,6 +4584,16 @@ void fuse_lowlevel_help(void)
 }
 
 #ifdef __APPLE__
+static void fuse_session_close(struct fuse_session *se)
+{
+	pthread_mutex_lock(&se->lock);
+	if (se->mfch != NULL && !se->mfch_closed) {
+		MFChannelClose(se->mfch);
+		se->mfch_closed = true;
+	}
+	pthread_mutex_unlock(&se->lock);
+}
+
 void fuse_session_destroy(struct fuse_session *se)
 {
 	if (se->got_init && !se->got_destroy) {
@@ -4395,6 +4617,7 @@ void fuse_session_destroy(struct fuse_session *se)
 
 	if (se->disk != NULL)
 		CFRelease(se->disk);
+	fuse_session_close(se);
 #else
 	if (se->got_init && !se->got_destroy) {
 		if (se->op.destroy)
@@ -4409,15 +4632,14 @@ void fuse_session_destroy(struct fuse_session *se)
 	pthread_mutex_destroy(&se->mt_lock);
 	pthread_mutex_destroy(&se->lock);
 	free(se->cuse_data);
+#ifdef __APPLE__
+	if (se->mfch != NULL)
+		MFRelease(se->mfch);
+#endif
 	if (se->fd != -1)
 		close(se->fd);
 	if (se->io != NULL)
 		free(se->io);
-#ifdef __APPLE__
-	if (se->ioc != NULL) {
-		fuse_custom_io_ctx_destroy(se->ioc);
-	}
-#endif
 	destroy_mount_opts(se->mo);
 	free(se);
 }
@@ -4431,6 +4653,14 @@ static void fuse_ll_pipe_destructor(void *data)
 
 void fuse_buf_free(struct fuse_buf *buf)
 {
+#ifdef __APPLE__
+	if (buf->flags & FUSE_BUF_IS_MSG) {
+		buf->mem = NULL;
+		MFRelease(buf->msg);
+                buf->msg = NULL;
+		return;
+	}
+#endif
 	if (buf->mem == NULL)
 		return;
 
@@ -4478,6 +4708,9 @@ static int _fuse_session_receive_buf(struct fuse_session *se,
 {
 	int err;
 	ssize_t res;
+#ifdef __APPLE__
+	MFMessageRef mfmsg = NULL;
+#endif
 	size_t bufsize;
 #ifdef HAVE_SPLICE
 	struct fuse_ll_pipe *llp;
@@ -4605,6 +4838,10 @@ pipe_retry:
 fallback:
 #endif
 	bufsize = internal ? buf->mem_size : se->bufsize;
+#ifdef __APPLE__
+	if (se->mfch != NULL)
+		goto restart;
+#endif
 	if (!buf->mem) {
 		bufsize = se->bufsize; /* might have changed */
 		buf->mem = buf_alloc(bufsize, internal);
@@ -4619,24 +4856,38 @@ fallback:
 	}
 
 restart:
+#ifdef __APPLE__
+	if (se->mfch != NULL) {
+		mfmsg = MFChannelCopyNextMessage(se->mfch);
+		if (mfmsg == NULL) {
+			res = -1;
+		} else {
+			res = MFMessageGetBodySize(mfmsg);
+			if (res == -1) {
+				MFRelease(mfmsg);
+				mfmsg = NULL;
+			}
+		}
+	} else
+#endif
 	if (se->io != NULL) {
 		/* se->io->read is never NULL if se->io is not NULL as
 		specified by fuse_session_custom_io()*/
-#ifdef __APPLE__
-		res = se->io->read(ch ? ch->fd : se->fd, buf->mem, bufsize,
-				   se->ioc ? se->ioc->data : se->userdata);
-#else
 		res = se->io->read(ch ? ch->fd : se->fd, buf->mem, bufsize,
 				   se->userdata);
-#endif
 	} else {
 		res = read(ch ? ch->fd : se->fd, buf->mem, bufsize);
 	}
 	err = errno;
 	trace_request_receive(err);
 
-	if (fuse_session_exited(se))
+	if (fuse_session_exited(se)) {
+#ifdef __APPLE__
+		if (mfmsg != NULL)
+			MFRelease(mfmsg);
+#endif
 		return 0;
+	}
 	if (res == -1) {
 		if (err == EINVAL && internal && se->bufsize > bufsize) {
 			/* FUSE_INIT might have increased the required bufsize */
@@ -4674,10 +4925,35 @@ restart:
 	}
 	if ((size_t)res < sizeof(struct fuse_in_header)) {
 		fuse_log(FUSE_LOG_ERR, "short read on fuse device\n");
+#ifdef __APPLE__
+		if (mfmsg != NULL)
+			MFRelease(mfmsg);
+#endif
 		return -EIO;
 	}
 
+#ifdef __APPLE__
+	if (mfmsg != NULL) {
+		ssize_t body_count;
+		const struct iovec *body_bufs;
+
+		body_count = MFMessageGetBodyBuffers(mfmsg, &body_bufs);
+		if (body_count < 1 || body_count > 2) {
+			fuse_log(FUSE_LOG_ERR, "fuse: invalid message body\n");
+			MFRelease(mfmsg);
+			return -EIO;
+		}
+
+		buf->size = res;
+		buf->flags = FUSE_BUF_IS_MSG | FUSE_BUF_BORROWED;
+		buf->msg = mfmsg;
+		buf->mem_orig = buf->mem;
+		buf->mem = body_bufs[0].iov_base;
+		
+	}
+#else
 	buf->size = res;
+#endif
 
 	return res;
 }
@@ -4953,6 +5229,7 @@ static void fuse_session_dasession_destroy(void)
 }
 
 struct fuse_session_mount_context {
+	pthread_mutex_t lock;
 	char mountpoint[MAXPATHLEN];
 	struct fuse_session *se;
 };
@@ -4966,6 +5243,7 @@ fuse_session_mount_context_new(const char *mountpoint, struct fuse_session *se)
 		return NULL;
 	}
 
+	pthread_mutex_init(&mc->lock, NULL);
 	stpncpy(mc->mountpoint, mountpoint, sizeof(mc->mountpoint));
 	mc->se = fuse_session_get(se);
 	return mc;
@@ -4974,6 +5252,7 @@ fuse_session_mount_context_new(const char *mountpoint, struct fuse_session *se)
 static void
 fuse_session_mount_context_destroy(struct fuse_session_mount_context *mc)
 {
+	pthread_mutex_destroy(&mc->lock);
 	if (mc->se)
 		fuse_session_put(mc->se);
 	free(mc);
@@ -4992,10 +5271,12 @@ static void fuse_session_mount_callback(void *context, int status)
 	CFURLRef url = NULL;
 	DADiskRef disk = NULL;
 
+	pthread_mutex_lock(&mc->lock);
+
 	if (status != 0) {
 		fuse_log(FUSE_LOG_ERR, "fuse: mount failed with error: %d\n",
 			 status);
-		goto out;
+		goto err_out;
 	}
 
 	url = CFURLCreateFromFileSystemRepresentation(
@@ -5004,14 +5285,23 @@ static void fuse_session_mount_callback(void *context, int status)
 	disk = DADiskCreateFromVolumePath(NULL, fuse_session_dasession, url);
 	CFRelease(url);
 
-	if (disk) {
-		pthread_mutex_lock(&mc->se->lock);
-		mc->se->disk = disk;
-		pthread_mutex_unlock(&mc->se->lock);
+	if (!disk) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to create DADiskRef\n");
+		goto err_out;
 	}
 
+	pthread_mutex_lock(&mc->se->lock);
+	mc->se->disk = disk;
+	pthread_mutex_unlock(&mc->se->lock);
+
 out:
+	pthread_mutex_unlock(&mc->lock);
 	fuse_session_mount_context_destroy(mc);
+	return;
+
+err_out:
+	fuse_session_close(mc->se);
+	goto out;
 }
 #endif
 
@@ -5020,6 +5310,7 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 	int fd;
 	char *mountpoint;
 #ifdef __APPLE__
+	MFChannelRef mfch;
 	struct fuse_session_mount_context *mc;
 #endif
 
@@ -5046,12 +5337,43 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 	} while (fd >= 0 && fd <= 2);
 
 #ifdef __APPLE__
-	if (fuse_darwin_custom_io(se->mo, &se->io, &se->ioc) != 0) {
-		fuse_log(FUSE_LOG_ERR, "fuse: failed to setup custom io\n");
+	mc = fuse_session_mount_context_new(mountpoint, se);
+	if (mc == NULL) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to allocate mount context\n");
 		goto error_out;
 	}
-#endif
 
+	pthread_mutex_lock(&mc->lock);
+
+	/*
+	 * Note: Keep the mount context locked until the channel has been
+	 * registered with the session. Otherwise, a concurrent mount failure
+	 * could race with registration and leave the channel open.
+	 */
+
+	/* Open channel */
+	mfch = fuse_darwin_mount(mountpoint, se->mo,
+				 &fuse_session_mount_callback, mc);
+	if (!mfch) {
+		pthread_mutex_unlock(&mc->lock);
+
+		/* fuse_session_mount_callback() is not going to be called */
+		fuse_session_mount_context_destroy(mc);
+		goto error_out;
+	}
+
+	pthread_mutex_lock(&se->lock);
+	se->mfch = MFRetain(mfch);
+	se->mfch_closed = false;
+	pthread_mutex_unlock(&se->lock);
+
+	se->fd = -1;
+
+	pthread_mutex_unlock(&mc->lock);
+
+	MFRelease(mfch);
+#else
 	/*
 	 * To allow FUSE daemons to run without privileges, the caller may open
 	 * /dev/fuse before launching the file system and pass on the file
@@ -5070,24 +5392,6 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 		return 0;
 	}
 
-#ifdef __APPLE__
-	mc = fuse_session_mount_context_new(mountpoint, se);
-	if (mc == NULL) {
-		fuse_log(FUSE_LOG_ERR,
-			 "fuse: failed to allocate mount context\n");
-		goto error_out;
-	}
-
-	/* Open channel */
-	fd = fuse_darwin_mount(mountpoint, se->mo, &fuse_session_mount_callback,
-			       mc);
-	if (fd == -1) {
-		/* fuse_session_mount_callback() is not going to be called */
-		fuse_session_mount_context_destroy(mc);
-		goto error_out;
-	}
-	se->fd = fd;
-#else
 	/* Open channel */
 	fd = fuse_kern_mount(mountpoint, se->mo);
 	if (fd == -1)
@@ -5107,6 +5411,10 @@ error_out:
 
 int fuse_session_fd(struct fuse_session *se)
 {
+#ifdef __APPLE__
+	if (se->mfch != NULL)
+		return MFChannelGetFileDescriptor(se->mfch);
+#endif
 	return se->fd;
 }
 
@@ -5114,22 +5422,40 @@ void fuse_session_unmount(struct fuse_session *se)
 {
 #ifdef __APPLE__
 	DADiskRef disk = NULL;
+	bool exited = fuse_session_exited(se);
 
-	/*
-	 * Note: Once mount(2) completes, we attach a DADiskRef of our volume
-	 * to the session. se->disk might be NULL.
-	 */
+	if (exited) {
+		/*
+		 * Note: The session has exited and no new incoming messages
+		 * will be processed. A graceful unmount is no longer possible.
+		 * There is no need to the backend to wait on replies that will
+		 * never arrive.
+		 */
+
+		fuse_session_close(se);
+	}
+
 	pthread_mutex_lock(&se->lock);
 	disk = se->disk;
 	se->disk = NULL;
 	pthread_mutex_unlock(&se->lock);
 
+	/*
+	 * Note: After mount(2) completes, we attach the volume's DADiskRef to
+	 * the session. If obtaining the DADiskRef fails, we close the
+	 * MFChannelRef.
+	 *
+	 * When se->disk is NULL, the session was never mounted, mount(2) has
+	 * not returned yet, or fuse_session_unmount() has already been called.
+	 * In these cases, calling fuse_session_unmount() is a no-op.
+	 */
+
 	if (disk != NULL) {
 		DADiskUnmountOptions options = kDADiskUnmountOptionDefault;
-		if (fuse_session_exited(se))
+		if (exited)
 			options |= kDADiskUnmountOptionForce;
 
-		fuse_darwin_unmount(disk, options, se->fd);
+		fuse_darwin_unmount(disk, options);
 		CFRelease(disk);
 	}
 #else

@@ -2,7 +2,7 @@
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (C) 2006-2008  Amit Singh / Google Inc.
-  Copyright (C) 2011-2025  Benjamin Fleischer
+  Copyright (C) 2011-2026  Benjamin Fleischer
 
   Helper functions to create (simple) standalone programs. With the
   aid of these functions it should be possible to create full FUSE
@@ -491,6 +491,7 @@ struct fuse_conn_info_opts* fuse_parse_conn_info_opts(struct fuse_args *args)
 	return opts;
 }
 
+#ifndef __APPLE__
 int fuse_open_channel(const char *mountpoint, const char* options)
 {
 	struct mount_opts *opts = NULL;
@@ -503,12 +504,9 @@ int fuse_open_channel(const char *mountpoint, const char* options)
 	if (opts == NULL)
 		return -1;
 
-#ifdef __APPLE__
-	fd = fuse_darwin_mount(mountpoint, opts, NULL, NULL);
-#else
 	fd = fuse_kern_mount(mountpoint, opts);
-#endif
 	destroy_mount_opts(opts);
 
 	return fd;
 }
+#endif
