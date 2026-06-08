@@ -5771,6 +5771,7 @@ static void fuse_lib_monitor(fuse_req_t req, fuse_ino_t ino, uint32_t flags)
 	}
 
 	fuse_fs_monitor(f->fs, path, flags);
+    free_path(f, ino, path);
 	fuse_reply_none(req);
 }
 #endif
