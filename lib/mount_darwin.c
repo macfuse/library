@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2024 Benjamin Fleischer
+ * Copyright (c) 2011-2026 Benjamin Fleischer
  *
  * Derived from mount_bsd.c from the FUSE distribution.
  *
@@ -39,8 +39,6 @@
 #include <DiskArbitration/DiskArbitration.h>
 #include <MFMount/MFMount.h>
 
-static int quiet_mode = 0;
-
 enum {
 	KEY_ALLOW_ROOT,
 	KEY_AUTO_CACHE,
@@ -57,6 +55,7 @@ struct mount_opts {
 	int allow_other;
 	int allow_root;
 	int ishelp;
+	int quiet_mode;
 	char *kernel_opts;
 	char *backend;
 };
@@ -182,8 +181,8 @@ static void mount_run(const char *mount_args)
 {
 	int err;
 
-	char *mount_prog_path;
-	char *mount_cmd;
+	char *mount_prog_path = NULL;
+	char *mount_cmd = NULL;
 
 	mount_prog_path = fuse_resource_path(FUSE_MOUNT_PROG);
 	if (!mount_prog_path) {
@@ -248,7 +247,7 @@ static int fuse_mount_opt_proc(void *data, const char *arg, int key,
 			return 0;
 
 		case KEY_QUIET:
-			quiet_mode = 1;
+			mo->quiet_mode = 1;
 			return 0;
 
 		case KEY_HELP:
@@ -264,10 +263,11 @@ static int fuse_mount_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options)
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options,
+			 DADiskUnmountCallback callback, void *context)
 {
 	if (disk)
-		DADiskUnmount(disk, options, NULL, NULL);
+		DADiskUnmount(disk, options, callback, context);
 }
 
 void fuse_unmount_compat22(const char *mountpoint)
@@ -356,51 +356,100 @@ static void *fuse_mount_core_wait(void *arg)
 	a->callback(a->context, status);
 
 out:
+	close(a->fd);
 	free(arg);
 	return NULL;
 }
 
-static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
-			   void (*callback)(void *, int), void *context)
+static int fuse_mount_core_start_wait(int fd,
+				      void (*callback)(void *context, int res),
+				      void *context)
 {
-	int fd;
-	int result;
-	char *dev;
-	char *mount_prog_path;
-	int fds[2];
-	pid_t pid;
-	int status;
+	int res = -1;
+	pthread_t mount_wait_thread;
 
-	if (!mountpoint) {
-		fprintf(stderr, "fuse: missing or invalid mount point\n");
+	struct fuse_mount_core_wait_arg *arg =
+		calloc(1, sizeof(struct fuse_mount_core_wait_arg));
+	if (arg == NULL)
+		return -1;
+
+	arg->fd = fd;
+	arg->callback = callback;
+	arg->context = context;
+
+	res = fuse_start_thread(&mount_wait_thread,
+				&fuse_mount_core_wait, (void *)arg);
+	if (res) {
+		free(arg);
 		return -1;
 	}
 
-	signal(SIGCHLD, SIG_DFL); /* So that we can wait4() below. */
+	pthread_detach(mount_wait_thread);
+	return 0;
+}
+
+static int fuse_mount_core_reap_launcher(pid_t pid)
+{
+	int status;
+	pid_t res;
+
+	do {
+		res = waitpid(pid, &status, 0);
+	} while (res == -1 && errno == EINTR);
+
+	if (res == -1 && errno == ECHILD)
+		return 0;
+	if (res == -1)
+		return -1;
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return -1;
+
+	return 0;
+}
+
+static MFChannelRef fuse_mount_core(const char *mountpoint,
+				    struct mount_opts *mo,
+				    void (*callback)(void *, int),
+				    void *context)
+{
+	int fd;
+	int result;
+	char *mount_prog_path;
+	int fds[2];
+	MFChannelRef mfch;
+	pid_t pid;
+
+	if (!mountpoint) {
+		fprintf(stderr, "fuse: missing or invalid mount point\n");
+		return NULL;
+	}
 
 	if (getenv("FUSE_NO_MOUNT") || ! mountpoint) {
-		goto out;
+		return NULL;
 	}
 
 	mount_prog_path = fuse_resource_path(FUSE_MOUNT_PROG);
 	if (!mount_prog_path) {
 		fprintf(stderr, "fuse: mount program missing\n");
-		return -1;
+		return NULL;
 	}
 
 	result = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	if (result == -1) {
 		fprintf(stderr, "fuse: socketpair() failed");
-		return -1;
+		free(mount_prog_path);
+		return NULL;
 	}
 
 	pid = fork();
 
 	if (pid == -1) {
 		perror("fuse: fork failed");
+		free(mount_prog_path);
 		close(fds[0]);
 		close(fds[1]);
-		return -1;
+		return NULL;
 	}
 
 	if (pid == 0) {
@@ -436,7 +485,7 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 				argv[a++] = "-o";
 				argv[a++] = mo->kernel_opts;
 			}
-			if (quiet_mode) {
+			if (mo->quiet_mode) {
 				argv[a++] = "-q";
 			}
 			argv[a++] = mountpoint;
@@ -453,46 +502,45 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 	free(mount_prog_path);
 
 	close(fds[0]);
+
+	if (fuse_mount_core_reap_launcher(pid) != 0) {
+		fprintf(stderr, "fuse: failed to start mount helper\n");
+		close(fds[1]);
+		return NULL;
+	}
+
 	fd = receive_fd(fds[1]);
-
-	if (fd != -1 && callback) {
-		int res = -1;
-		pthread_t mount_wait_thread = NULL;
-
-		struct fuse_mount_core_wait_arg *arg =
-			calloc(1, sizeof(struct fuse_mount_core_wait_arg));
-		arg->fd = fds[1];
-		arg->callback = callback;
-		arg->context = context;
-
-		res = fuse_start_thread(&mount_wait_thread,
-					&fuse_mount_core_wait, (void *)arg);
-		if (res) {
-			perror("fuse: failed to wait for mount status");
-			goto mount_err_out;
-		}
-
-		pthread_detach(mount_wait_thread);
+	if (fd == -1) {
+		close(fds[1]);
+		return NULL;
 	}
 
-	if (waitpid(pid, &status, 0) == -1 || WEXITSTATUS(status) != 0) {
-		perror("fuse: failed to mount file system");
-		goto mount_err_out;
+	mfch = MFChannelCreateWithDeviceFileDescriptor(fd);
+	if (mfch == NULL) {
+		close(fds[1]);
+		close(fd);
+		return NULL;
 	}
 
-	goto out;
+	if (callback &&
+	    fuse_mount_core_start_wait(fds[1], callback, context) != 0) {
+		perror("fuse: failed to wait for mount status");
+		close(fds[1]);
+		MFChannelClose(mfch);
+		MFRelease(mfch);
+		return NULL;
+	}
 
-mount_err_out:
-	close(fd);
-	fd = -1;
+	if (!callback)
+		close(fds[1]);
 
-out:
-	return fd;
+	return mfch;
 }
 
 struct fuse_mount_ext_arg {
 	char *mountpoint;
 	char *options;
+	int quiet_mode;
 	MFChannelRef channel;
 	void (*callback)(void *context, int res);
 	void *context;
@@ -503,7 +551,7 @@ static void *fuse_mount_ext_bg(void *arg)
 	struct fuse_mount_ext_arg *a = (struct fuse_mount_ext_arg *)arg;
 	int res = -1;
 
-	res = MFMount(a->channel, a->mountpoint, a->options, quiet_mode);
+	res = MFMount(a->channel, a->mountpoint, a->options, a->quiet_mode);
 	if (a->callback) {
 		a->callback(a->context, res);
 	}
@@ -525,6 +573,9 @@ static MFChannelRef fuse_mount_ext(const char *mountpoint,
 	pthread_t mount_ext_thread;
 
 	MFChannelRef channel = MFChannelCreate();
+	if (channel == NULL) {
+		return NULL;
+	}
 
 	arg = calloc(1, sizeof(struct fuse_mount_ext_arg));
 	if (!arg) {
@@ -535,7 +586,8 @@ static MFChannelRef fuse_mount_ext(const char *mountpoint,
 	}
 
 	arg->mountpoint = strdup(mountpoint);
-	arg->options = strdup(mo->kernel_opts);
+	arg->options = strdup(mo->kernel_opts ? mo->kernel_opts : "");
+	arg->quiet_mode = mo->quiet_mode;
 	arg->channel = MFRetain(channel);
 	arg->callback = callback;
 	arg->context = context;
@@ -567,46 +619,58 @@ static MFChannelRef fuse_mount_ext(const char *mountpoint,
 	return channel;
 }
 
-MFChannelRef fuse_darwin_mount(const char *mountpoint, struct fuse_args *args,
-			       void (*callback)(void *, int), void *context)
+struct mount_opts *parse_mount_opts(struct fuse_args *args)
 {
-	struct mount_opts mo;
-	MFChannelRef mfch = NULL;
+	struct mount_opts *mo;
 
-	memset(&mo, 0, sizeof(mo));
-
-	/* to notify mount_macfuse it's called from lib */
-	setenv("_FUSE_CALL_BY_LIB", "1", 1);
-
-	if (args && fuse_opt_parse(args, &mo, fuse_mount_opts,
-				   fuse_mount_opt_proc) == -1) {
+	mo = (struct mount_opts *)malloc(sizeof(struct mount_opts));
+	if (mo == NULL)
 		return NULL;
-	}
 
-	if (mo.allow_other && mo.allow_root) {
+	memset(mo, 0, sizeof(struct mount_opts));
+
+	if (args && fuse_opt_parse(args, mo, fuse_mount_opts,
+				   fuse_mount_opt_proc) == -1)
+		goto err_out;
+
+	return mo;
+
+err_out:
+	destroy_mount_opts(mo);
+	return NULL;
+}
+
+void destroy_mount_opts(struct mount_opts *mo)
+{
+	free(mo->kernel_opts);
+	free(mo->backend);
+	free(mo);
+}
+
+int fuse_darwin_check_mount_opts(struct mount_opts *mo)
+{
+	if (mo->allow_other && mo->allow_root) {
 		fprintf(stderr,
 			"fuse: allow_other and allow_root are mutually exclusive\n");
-		goto out;
+		return -1;
 	}
+	if (mo->ishelp)
+		return -1;
+	return 0;
+}
 
-	if (mo.ishelp) {
-		goto out;
-	}
+MFChannelRef fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
+			       void (*callback)(void *, int), void *context)
+{
+	if (fuse_darwin_check_mount_opts(mo) != 0)
+		return NULL;
 
-	if (mo.backend && strcmp(mo.backend, "fskit") == 0) {
-		mfch = fuse_mount_ext(mountpoint, &mo, callback, context);
+	if (mo->backend && strcmp(mo->backend, "fskit") == 0) {
+		return fuse_mount_ext(mountpoint, mo, callback, context);
 	} else {
-		int fd = fuse_mount_core(mountpoint, &mo, callback, context);
-		if (fd < 0)
-			goto out;
+		/* to notify mount_macfuse it's called from lib */
+		setenv("_FUSE_CALL_BY_LIB", "1", 1);
 
-		mfch = MFChannelCreateWithDeviceFileDescriptor(fd);
-		if (mfch == NULL)
-			close(fd);
+		return fuse_mount_core(mountpoint, mo, callback, context);
 	}
-
-out:
-	free(mo.kernel_opts);
-	free(mo.backend);
-	return mfch;
 }

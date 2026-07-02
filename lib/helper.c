@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2024 Benjamin Fleischer
+ * Copyright (c) 2011-2026 Benjamin Fleischer
  */
 
 #include "config.h"
@@ -31,10 +31,20 @@
 #include <sys/param.h>
 
 #ifdef __APPLE__
-#  include <CoreFoundation/CoreFoundation.h>
-#  include <DiskArbitration/DiskArbitration.h>
-#  include <MFMount/MFMount.h>
-#endif
+static _Atomic bool fuse_darwin_mount_started_flag;
+
+void fuse_darwin_set_mount_started(void)
+{
+	atomic_store_explicit(&fuse_darwin_mount_started_flag, true,
+			      memory_order_relaxed);
+}
+
+bool fuse_darwin_mount_started(void)
+{
+	return atomic_load_explicit(&fuse_darwin_mount_started_flag,
+				    memory_order_relaxed);
+}
+#endif /* __APPLE__ */
 
 enum  {
 	KEY_HELP,
@@ -216,6 +226,13 @@ err:
 
 int fuse_daemonize(int foreground)
 {
+#ifdef __APPLE__
+	if (!foreground && fuse_darwin_mount_started()) {
+		fprintf(stderr,
+			"fuse: daemonize requested after mount started; continuing in foreground\n");
+		foreground = 1;
+	}
+#endif /* __APPLE__ */
 	if (!foreground) {
 		int nullfd;
 		int waiter[2];
@@ -266,113 +283,26 @@ int fuse_daemonize(int foreground)
 	return 0;
 }
 
-#ifdef __APPLE__
-
-static DASessionRef fuse_dasession;
-
-__attribute__((constructor))
-static void fuse_dasession_init(void)
-{
-	fuse_dasession = DASessionCreate(NULL);
-}
-
-__attribute__((destructor))
-static void fuse_dasession_destroy(void)
-{
-	CFRelease(fuse_dasession);
-}
-
-struct fuse_mount_context {
-	pthread_mutex_t lock;
-	char mountpoint[MAXPATHLEN];
-	struct fuse_chan *ch;
-};
-
-static struct fuse_mount_context *fuse_mount_context_new(const char *mountpoint)
-{
-	struct fuse_mount_context *mc =
-		calloc(1, sizeof(struct fuse_mount_context));
-	pthread_mutex_init(&mc->lock, NULL);
-	strncpy(mc->mountpoint, mountpoint, sizeof(mc->mountpoint) - 1);
-	return mc;
-}
-
-static void fuse_mount_context_destroy(struct fuse_mount_context *mc)
-{
-	pthread_mutex_destroy(&mc->lock);
-	if (mc->ch)
-		fuse_chan_release(mc->ch);
-	free(mc);
-}
-
-/*
- * status codes:
- * -1   => unknown error, assume mount(2) failed
- * 0    => mount operation completed succesful
- * > 0  => error code returned by mount(2)
- */
-static void fuse_mount_callback(void *context, int status)
-{
-	struct fuse_mount_context *mc = (struct fuse_mount_context *)context;
-	CFURLRef url = NULL;
-	DADiskRef disk = NULL;
-
-	pthread_mutex_lock(&mc->lock);
-
-	if (status != 0) {
-		fprintf(stderr, "fuse: mount failed with error: %d\n", status);
-		goto err_out;
-	}
-
-	url = CFURLCreateFromFileSystemRepresentation(
-		NULL, (const UInt8 *)mc->mountpoint, strlen(mc->mountpoint),
-		TRUE);
-	disk = DADiskCreateFromVolumePath(NULL, fuse_dasession, url);
-	CFRelease(url);
-
-	if (!disk) {
-		fprintf(stderr, "fuse: failed to create DADiskRef\n");
-		goto err_out;
-	}
-
-	fuse_chan_set_disk(mc->ch, disk);
-	CFRelease(disk);
-	goto out;
-
-err_out:
-	fuse_chan_destroy(mc->ch);
-	mc->ch = NULL;
-
-out:
-	pthread_mutex_unlock(&mc->lock);
-	fuse_mount_context_destroy(mc);
-}
-
-struct mount_opts {
-	char *backend;
-};
-
-static const struct fuse_opt fuse_mount_opts[] = {
-	{ "backend=%s", offsetof(struct mount_opts, backend), 1 },
-	FUSE_OPT_KEY("backend=", FUSE_OPT_KEY_KEEP),
-	FUSE_OPT_END
-};
-
-#endif /* __APPLE__ */
-
 static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 					   struct fuse_args *args)
 {
 	struct fuse_chan *ch = NULL;
 	int fd;
 #ifdef __APPLE__
-	MFChannelRef mfch;
-	struct mount_opts mo;
-	struct fuse_mount_context *mc;
+	struct mount_opts *mo = NULL;
 
-	memset(&mo, 0, sizeof(mo));
-	if (fuse_opt_parse(args, &mo, fuse_mount_opts, NULL) == -1)
+	if (mountpoint == NULL) {
+		fprintf(stderr, "fuse: missing or invalid mount point\n");
 		goto out;
+	}
+
+	mo = parse_mount_opts(args);
+	if (mo == NULL)
+		goto out;
+	if (fuse_darwin_check_mount_opts(mo) != 0) {
+		destroy_mount_opts(mo);
+		goto out;
+	}
 #endif /* __APPLE__ */
 
 	/*
@@ -386,36 +316,13 @@ static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 	} while (fd >= 0 && fd <= 2);
 
 #ifdef __APPLE__
-	mc = fuse_mount_context_new(mountpoint);
-	pthread_mutex_lock(&mc->lock);
-
-	mfch = fuse_darwin_mount(mountpoint, args, &fuse_mount_callback, mc);
-	if (!mfch) {
-		pthread_mutex_unlock(&mc->lock);
-
-		/* fuse_mount_callback() is not going to be called */
-		fuse_mount_context_destroy(mc);
+	ch = fuse_darwin_chan_new(mountpoint, mo);
+	if (!ch) {
+		destroy_mount_opts(mo);
 		goto out;
 	}
 
-	ch = fuse_darwin_chan_new(mfch);
-	if (ch) {
-		fuse_chan_retain(ch);
-		mc->ch = ch;
-	} else {
-		/*
-		 * Note: There is no DADiskRef we could pass to unmount because
-		 * the asynchronous mount operation has not been completed, yet.
-		 * However, we need to make sure the channel is closed.
-		 */
-		MFChannelClose(mfch);
-		MFRelease(mfch);
-	}
-
-	pthread_mutex_unlock(&mc->lock);
-
 out:
-	free(mo.backend);
 #else /* __APPLE__ */
 	fd = fuse_mount_compat25(mountpoint, args);
 	if (fd == -1)
@@ -424,7 +331,7 @@ out:
 	ch = fuse_kern_chan_new(fd);
 	if (!ch)
 		fuse_kern_unmount(mountpoint, fd);
-#endif
+#endif /* __APPLE__ */
 
 	return ch;
 }
@@ -442,14 +349,9 @@ static void fuse_unmount_common(const char *mountpoint, struct fuse_chan *ch)
 	 * completes, we attach a DADiskRef of our volume to the channel.
 	 */
 	if (ch) {
-		DADiskRef disk = fuse_chan_disk(ch);
-		if (disk) {
-			fuse_darwin_unmount(disk, kDADiskUnmountOptionDefault);
-			CFRelease(disk);
-		} else {
-			/* Volume not mounted, destroy the channel */
+		fuse_darwin_chan_unmount(ch);
+		if (fuse_darwin_chan_not_mounted(ch))
 			fuse_chan_destroy(ch);
-		}
 	}
 #else /* __APPLE__ */
 	if (mountpoint) {

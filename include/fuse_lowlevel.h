@@ -1906,7 +1906,6 @@ struct fuse_chan *fuse_chan_new(struct fuse_chan_ops *op, int fd,
 int fuse_chan_fd(struct fuse_chan *ch);
 
 #ifdef __APPLE__
-
 /**
  * Query the disk of the channel
  *
@@ -1921,7 +1920,6 @@ DADiskRef fuse_chan_disk(struct fuse_chan *ch);
  * @param ch the channel
  */
 void fuse_chan_cleardisk(struct fuse_chan *ch);
-
 #endif /* __APPLE__ */
 
 /**

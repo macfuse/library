@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2025 Benjamin Fleischer
+ * Copyright (c) 2011-2026 Benjamin Fleischer
  */
 
 #define _GNU_SOURCE
@@ -2138,7 +2138,13 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	if (f->big_writes)
 		f->conn.want |= FUSE_CAP_BIG_WRITES;
 #ifdef __APPLE__
-	if (f->conn.capable & FUSE_CAP_REPLY_BUF)
+	if (req->mfmsg != NULL && (f->conn.capable & FUSE_CAP_REPLY_BUF))
+		/*
+		 * Note: Reply buffers require the original MFMessageRef to stay
+		 * attached to the request. If FUSE_INIT was received through
+		 * the raw channel API, the message was flattened and released,
+		 * so do not negotiate reply-buffer support.
+		 */
 		f->conn.want |= FUSE_CAP_REPLY_BUF;
 	if (f->conn.capable & FUSE_CAP_PAYLOAD_BUF)
 		f->conn.want |= FUSE_CAP_PAYLOAD_BUF;
@@ -3212,8 +3218,11 @@ static int fuse_ll_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 
 #ifdef __APPLE__
 	struct fuse_chan *ch = *chp;
-	MFChannelRef mfch = (MFChannelRef)fuse_chan_data(ch);
+	MFChannelRef mfch = NULL;
 
+	res = fuse_darwin_chan_mfch(ch, &mfch);
+	if (res != 0)
+		return res;
 	if (mfch != NULL)
 		return fuse_ll_receive_buf_mfch(se, buf, mfch);
 #else

@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2025 Benjamin Fleischer
+ * Copyright (c) 2011-2026 Benjamin Fleischer
  */
 
 #include "config.h"
@@ -5156,6 +5156,9 @@ struct fuse_cmd *fuse_read_cmd(struct fuse *f)
 static int fuse_session_loop_remember(struct fuse *f)
 {
 	struct fuse_session *se = f->se;
+#ifdef __APPLE__
+	MFChannelRef mfch = NULL;
+#endif
 	int res = 0;
 	struct timespec now;
 	time_t next_clean;
@@ -5163,7 +5166,7 @@ static int fuse_session_loop_remember(struct fuse *f)
 	size_t bufsize = fuse_chan_bufsize(ch);
 	char *buf = (char *) malloc(bufsize);
 	struct pollfd fds = {
-		.fd = fuse_chan_fd(ch),
+		.fd = -1,
 		.events = POLLIN
 	};
 
@@ -5171,6 +5174,16 @@ static int fuse_session_loop_remember(struct fuse *f)
 		fprintf(stderr, "fuse: failed to allocate read buffer\n");
 		return -1;
 	}
+
+#ifdef __APPLE__
+	res = fuse_darwin_chan_mfch(ch, &mfch);
+	if (res != 0) {
+		free(buf);
+		return -1;
+	}
+	if (mfch == NULL)
+#endif
+		fds.fd = fuse_chan_fd(ch);
 
 	curr_time(&now);
 	next_clean = now.tv_sec;
@@ -5188,7 +5201,12 @@ static int fuse_session_loop_remember(struct fuse *f)
 		else
 			timeout = 0;
 
-		res = poll(&fds, 1, timeout * 1000);
+#ifdef __APPLE__
+		if (mfch != NULL)
+			res = MFChannelWaitForNextMessage(mfch, timeout * 1000);
+		else
+#endif
+			res = poll(&fds, 1, timeout * 1000);
 		if (res == -1) {
 			if (errno == EINTR)
 				continue;

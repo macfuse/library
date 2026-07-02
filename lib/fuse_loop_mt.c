@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2024 Benjamin Fleischer
+ * Copyright (c) 2011-2026 Benjamin Fleischer
  */
 
 #include "fuse_lowlevel.h"
@@ -26,28 +26,180 @@
 #endif
 #include <errno.h>
 #include <sys/time.h>
+#include <time.h>
 
 #ifdef __APPLE__
 
 /*
- * Unnamed semaphores are not available on macOS. We use dispatch semaphores as
- * fallback.
+ * Unnamed semaphores are not available on macOS. We use the following fallback
+ * instead.
  *
- * Unlike unnamed semaphores, dispatch semaphores are not async-signal safe.
- * This means using dispatch semaphores in signal handlers is not safe. This
- * is not an issue here since we do not use semaphores in signal handlers.
+ * Unlike POSIX semaphores, this fallback is not async-signal safe. Calling
+ * sem_post() from a signal handler is not safe because the implementation uses
+ * pthread mutexes and condition variables internally.
  *
- * Unlike sem_wait(), dispatch_semmaphore_wait() is not interruptible. This is
- * not an issue here since we do not rely on sem_wait() being interruptible.
+ * The fallback also does not wake when a signal is delivered to a thread blocked
+ * in sem_wait(). pthread_cond_wait() does not return EINTR. Code that needs to
+ * notice signals while waiting must use sem_timedwait() or another explicit
+ * wakeup mechanism.
  */
 
-#  include <dispatch/dispatch.h>
+struct fuse_sem {
+	unsigned int count;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+};
 
-#  define sem_t dispatch_semaphore_t
-#  define sem_init(s, p, v) *(s) = dispatch_semaphore_create((v))
-#  define sem_post(s) dispatch_semaphore_signal(*(s))
-#  define sem_wait(s) dispatch_semaphore_wait(*(s), DISPATCH_TIME_FOREVER)
-#  define sem_destroy(s) dispatch_release(*(s))
+typedef struct fuse_sem sem_t;
+
+#define FUSE_SEM_VALUE_MAX ((int32_t)32767)
+
+static int fuse_sem_init(sem_t *sem, int pshared, unsigned int value)
+{
+	int err;
+
+	if (pshared) {
+		errno = ENOSYS;
+		return -1;
+	}
+
+	if (value > FUSE_SEM_VALUE_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	sem->count = value;
+	err = pthread_mutex_init(&sem->lock, NULL);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	err = pthread_cond_init(&sem->cond, NULL);
+	if (err != 0) {
+		pthread_mutex_destroy(&sem->lock);
+		errno = err;
+		return -1;
+	}
+
+	return 0;
+}
+
+static void fuse_sem_unlock(void *lock)
+{
+	pthread_mutex_unlock((pthread_mutex_t *)lock);
+}
+
+static int fuse_sem_destroy(sem_t *sem)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_cond_destroy(&sem->cond);
+	if (err != 0) {
+		errno = err;
+		res = -1;
+	}
+
+	err = pthread_mutex_destroy(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		res = -1;
+	}
+
+	return res;
+}
+
+static int fuse_sem_post(sem_t *sem)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_mutex_lock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	if (sem->count < FUSE_SEM_VALUE_MAX) {
+		sem->count++;
+		err = pthread_cond_signal(&sem->cond);
+		if (err != 0) {
+			errno = err;
+			res = -1;
+		}
+	} else {
+		errno = ERANGE;
+		res = -1;
+	}
+
+	err = pthread_mutex_unlock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		res = -1;
+	}
+
+	return res;
+}
+
+static int fuse_sem_wait(sem_t *sem)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_mutex_lock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	pthread_cleanup_push(fuse_sem_unlock, &sem->lock);
+
+	while (sem->count == 0 && res == 0)
+		res = pthread_cond_wait(&sem->cond, &sem->lock);
+
+	if (res == 0)
+		sem->count--;
+	else
+		errno = res;
+
+	pthread_cleanup_pop(1);
+
+	return res == 0 ? 0 : -1;
+}
+
+static int fuse_sem_timedwait(sem_t *sem, const struct timespec *abstime)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_mutex_lock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	pthread_cleanup_push(fuse_sem_unlock, &sem->lock);
+
+	while (sem->count == 0 && res == 0)
+		res = pthread_cond_timedwait(&sem->cond, &sem->lock,
+					     abstime);
+
+	if (res == 0)
+		sem->count--;
+	else
+		errno = res;
+
+	pthread_cleanup_pop(1);
+
+	return res == 0 ? 0 : -1;
+}
+
+#define sem_init(s, p, v) fuse_sem_init((s), (p), (v))
+#define sem_post(s) fuse_sem_post((s))
+#define sem_wait(s) fuse_sem_wait((s))
+#define sem_timedwait(s, t) fuse_sem_timedwait((s), (t))
+#define sem_destroy(s) fuse_sem_destroy((s))
 
 #endif /* __APPLE__ */
 
@@ -268,15 +420,35 @@ int fuse_session_loop_mt(struct fuse_session *se)
 	err = fuse_loop_start_thread(&mt);
 	pthread_mutex_unlock(&mt.lock);
 	if (!err) {
+#ifdef __APPLE__
+		while (!fuse_session_exited(se)) {
+			struct timespec timeout;
+
+			err = clock_gettime(CLOCK_REALTIME, &timeout);
+			if (err == -1) {
+				sem_wait(&mt.finish);
+				continue;
+			}
+
+			timeout.tv_sec += 1;
+			while (sem_timedwait(&mt.finish, &timeout) == -1 &&
+			       errno == EINTR);
+		}
+#else
 		/* sem_wait() is interruptible */
 		while (!fuse_session_exited(se))
 			sem_wait(&mt.finish);
+#endif
 
 		pthread_mutex_lock(&mt.lock);
 		for (w = mt.main.next; w != &mt.main; w = w->next)
 			pthread_cancel(w->thread_id);
 		mt.exit = 1;
 		pthread_mutex_unlock(&mt.lock);
+
+#ifdef __APPLE__
+		fuse_darwin_chan_interrupt(mt.prevch);
+#endif
 
 		while (mt.main.next != &mt.main)
 			fuse_join_worker(&mt, mt.main.next);

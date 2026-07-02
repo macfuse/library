@@ -7,7 +7,7 @@
 */
 
 /*
- * Copyright (c) 2017 Benjamin Fleischer
+ * Copyright (c) 2017-2026 Benjamin Fleischer
  */
 
 #include "fuse.h"
@@ -16,10 +16,31 @@
 #ifdef __APPLE__
 #  include <DiskArbitration/DiskArbitration.h>
 #  include <MFMount/MFMount.h>
+#  include <stdbool.h>
+#  include <stdatomic.h>
 #endif
 
 struct fuse_chan;
 struct fuse_ll;
+struct mount_opts;
+
+#ifdef __APPLE__
+enum fuse_chan_type {
+	FUSE_CHAN_TYPE_FD,
+	FUSE_CHAN_TYPE_DARWIN,
+};
+
+enum fuse_darwin_mount_state {
+	FUSE_DARWIN_MOUNT_NONE,
+	FUSE_DARWIN_MOUNT_DELAYED,
+	FUSE_DARWIN_MOUNT_MOUNTING,
+	FUSE_DARWIN_MOUNT_CONNECTING,
+	FUSE_DARWIN_MOUNT_MOUNTED,
+	FUSE_DARWIN_MOUNT_UNMOUNTING,
+	FUSE_DARWIN_MOUNT_UNMOUNTED,
+	FUSE_DARWIN_MOUNT_FAILED,
+};
+#endif
 
 struct fuse_session {
 	struct fuse_session_ops op;
@@ -33,6 +54,10 @@ struct fuse_session {
 	void *data;
 
 	volatile int exited;
+
+#ifdef __APPLE__
+	_Atomic bool sig_unmount;
+#endif
 
 	struct fuse_chan *ch;
 };
@@ -56,7 +81,7 @@ struct fuse_req {
 		} ni;
 	} u;
 #ifdef __APPLE__
-    MFMessageRef mfmsg;
+	MFMessageRef mfmsg;
 #endif
 	struct fuse_req *next;
 	struct fuse_req *prev;
@@ -114,7 +139,18 @@ int fuse_sync_compat_args(struct fuse_args *args);
 struct fuse_chan *fuse_kern_chan_new(int fd);
 
 #ifdef __APPLE__
-struct fuse_chan *fuse_darwin_chan_new(MFChannelRef channel);
+void fuse_chan_set_type(struct fuse_chan *ch, enum fuse_chan_type type);
+enum fuse_chan_type fuse_chan_get_type(struct fuse_chan *ch);
+
+struct fuse_chan *fuse_darwin_chan_new(const char *mountpoint,
+				       struct mount_opts *mo);
+int fuse_darwin_chan_mfch(struct fuse_chan *ch, MFChannelRef *mfchp);
+void fuse_darwin_chan_interrupt(struct fuse_chan *ch);
+void fuse_darwin_chan_unmount(struct fuse_chan *ch);
+bool fuse_darwin_chan_not_mounted(struct fuse_chan *ch);
+
+void fuse_darwin_set_mount_started(void);
+bool fuse_darwin_mount_started(void);
 #endif
 
 struct fuse_session *fuse_lowlevel_new_common(struct fuse_args *args,
@@ -133,14 +169,17 @@ void fuse_chan_release(struct fuse_chan *ch);
 int fuse_chan_clearfd(struct fuse_chan *ch);
 
 #ifdef __APPLE__
-void fuse_chan_set_disk(struct fuse_chan *ch, DADiskRef disk);
-void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options);
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options,
+			 DADiskUnmountCallback callback, void *context);
 #else
 void fuse_kern_unmount(const char *mountpoint, int fd);
 #endif
 
 #ifdef __APPLE__
-MFChannelRef fuse_darwin_mount(const char *mountpoint, struct fuse_args *args,
+struct mount_opts *parse_mount_opts(struct fuse_args *args);
+void destroy_mount_opts(struct mount_opts *mo);
+int fuse_darwin_check_mount_opts(struct mount_opts *mo);
+MFChannelRef fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
 			       void (*callback)(void *, int), void *context);
 #else
 int fuse_kern_mount(const char *mountpoint, struct fuse_args *args);

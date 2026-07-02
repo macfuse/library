@@ -8,7 +8,7 @@
 
 /*
  * Copyright (c) 2006-2008 Amit Singh/Google Inc.
- * Copyright (c) 2011-2017 Benjamin Fleischer
+ * Copyright (c) 2011-2026 Benjamin Fleischer
  */
 
 #include "fuse_i.h"
@@ -21,18 +21,12 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
-#ifdef __APPLE__
-#  include <sys/param.h>
-#endif
-
-#ifdef __APPLE__
-#  include <CoreFoundation/CoreFoundation.h>
-#endif
 
 struct fuse_chan {
 #ifdef __APPLE__
 	pthread_mutex_t lock;
 	int retain_count;
+	enum fuse_chan_type type;
 #endif
 
 	struct fuse_chan_ops op;
@@ -40,10 +34,6 @@ struct fuse_chan {
 	struct fuse_session *se;
 
 	int fd;
-
-#ifdef __APPLE__
-	DADiskRef disk;
-#endif
 
 	size_t bufsize;
 
@@ -150,10 +140,21 @@ void fuse_session_reset(struct fuse_session *se)
 	if (se->op.exit)
 		se->op.exit(se->data, 0);
 	se->exited = 0;
+#ifdef __APPLE__
+	atomic_store_explicit(&se->sig_interrupt, false, memory_order_relaxed);
+#endif
 }
 
 int fuse_session_exited(struct fuse_session *se)
 {
+#ifdef __APPLE__
+	if (atomic_exchange_explicit(&se->sig_unmount, false,
+				     memory_order_relaxed)) {
+		struct fuse_chan *ch = se->ch;
+		if (ch != NULL)
+			fuse_darwin_chan_unmount(ch);
+	}
+#endif
 	if (se->op.exited)
 		return se->op.exited(se->data);
 	else
@@ -220,17 +221,43 @@ void fuse_chan_release(struct fuse_chan *ch)
 	pthread_mutex_unlock(&ch->lock);
 
 	if (release) {
+		if (ch->op.destroy)
+			ch->op.destroy(ch);
 		pthread_mutex_destroy(&ch->lock);
-		if (ch->disk)
-			CFRelease(ch->disk);
 		free(ch);
 	}
+}
+
+void fuse_chan_set_type(struct fuse_chan *ch, enum fuse_chan_type type)
+{
+	pthread_mutex_lock(&ch->lock);
+	ch->type = type;
+	pthread_mutex_unlock(&ch->lock);
+}
+
+enum fuse_chan_type fuse_chan_get_type(struct fuse_chan *ch)
+{
+	enum fuse_chan_type type;
+
+	pthread_mutex_lock(&ch->lock);
+	type = ch->type;
+	pthread_mutex_unlock(&ch->lock);
+
+	return type;
 }
 
 #endif
 
 int fuse_chan_fd(struct fuse_chan *ch)
 {
+#ifdef __APPLE__
+	MFChannelRef mfch = NULL;
+
+	if (fuse_darwin_chan_mfch(ch, &mfch) != 0)
+		return -1;
+	if (mfch != NULL)
+		return MFChannelGetFileDescriptor(mfch);
+#endif
 	return ch->fd;
 }
 
@@ -240,44 +267,6 @@ int fuse_chan_clearfd(struct fuse_chan *ch)
 	ch->fd = -1;
 	return fd;
 }
-
-#ifdef __APPLE__
-
-DADiskRef fuse_chan_disk(struct fuse_chan *ch)
-{
-	DADiskRef disk = NULL;
-
-	pthread_mutex_lock(&ch->lock);
-	disk = ch->disk;
-	if (disk)
-		CFRetain(disk);
-	pthread_mutex_unlock(&ch->lock);
-
-	return disk;
-}
-
-void fuse_chan_set_disk(struct fuse_chan *ch, DADiskRef disk)
-{
-	DADiskRef old = NULL;
-
-	if (disk)
-		CFRetain(disk);
-
-	pthread_mutex_lock(&ch->lock);
-	old = ch->disk;
-	ch->disk = disk;
-	pthread_mutex_unlock(&ch->lock);
-
-	if (old)
-		CFRelease(old);
-}
-
-void fuse_chan_cleardisk(struct fuse_chan *ch)
-{
-	fuse_chan_set_disk(ch, NULL);
-}
-
-#endif /* __APPLE__ */
 
 size_t fuse_chan_bufsize(struct fuse_chan *ch)
 {
@@ -320,11 +309,11 @@ int fuse_chan_send(struct fuse_chan *ch, const struct iovec iov[], size_t count)
 void fuse_chan_destroy(struct fuse_chan *ch)
 {
 	fuse_session_remove_chan(ch);
-	if (ch->op.destroy)
-		ch->op.destroy(ch);
 #ifdef __APPLE__
 	fuse_chan_release(ch);
 #else
+	if (ch->op.destroy)
+		ch->op.destroy(ch);
 	free(ch);
 #endif
 }
