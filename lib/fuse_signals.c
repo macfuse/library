@@ -71,7 +71,7 @@ static void exit_handler(int sig)
 			 sig);
 
 #ifdef __APPLE__
-	atomic_store_explicit(&fuse_instance->sig_unmount, true,
+	atomic_store_explicit(&fuse_instance->sig_interrupt, true,
 			      memory_order_relaxed);
 #else
 	fuse_session_exit(fuse_instance);

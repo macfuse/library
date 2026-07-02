@@ -282,7 +282,7 @@ struct fuse_session {
 	enum fuse_darwin_mount_state mount_state;
 	pthread_cond_t mount_cond;
 	pthread_mutex_t mount_lock;
-	_Atomic bool sig_unmount;
+	_Atomic bool sig_interrupt;
 	_Atomic DADiskRef disk;
 #endif
 	_Atomic(char *)mountpoint;

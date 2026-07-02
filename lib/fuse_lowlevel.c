@@ -5981,9 +5981,14 @@ int fuse_session_exited(struct fuse_session *se)
 	bool exited =
 		atomic_load_explicit(&se->mt_exited, memory_order_relaxed);
 #ifdef __APPLE__
-	if (atomic_exchange_explicit(&se->sig_unmount, false,
+	if (atomic_exchange_explicit(&se->sig_interrupt, false,
 				     memory_order_relaxed)) {
-		fuse_session_unmount(se);
+		if (se->io != NULL) {
+			fuse_session_exit(se);
+			exited = true;
+		} else {
+			fuse_session_unmount(se);
+		}
 	}
 #endif
 	return exited ? 1 : 0;
