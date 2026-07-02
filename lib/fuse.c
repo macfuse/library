@@ -5957,6 +5957,9 @@ struct fuse_session *fuse_get_session(struct fuse *f)
 static int fuse_session_loop_remember(struct fuse *f)
 {
 	struct fuse_session *se = f->se;
+#ifdef __APPLE__
+	MFChannelRef mfch = NULL;
+#endif
 	int res = 0;
 	struct timespec now;
 	time_t next_clean;
@@ -5967,6 +5970,12 @@ static int fuse_session_loop_remember(struct fuse *f)
 	struct fuse_buf fbuf = {
 		.mem = NULL,
 	};
+
+#ifdef __APPLE__
+	res = fuse_session_mfch(se, &mfch);
+	if (res != 0)
+		return -1;
+#endif
 
 	curr_time(&now);
 	next_clean = now.tv_sec;
@@ -5980,13 +5989,11 @@ static int fuse_session_loop_remember(struct fuse *f)
 			timeout = 0;
 
 #ifdef __APPLE__
-		if (se->mfch != NULL)
-			res = MFChannelWaitForNextMessage(se->mfch, timeout * 1000);
+		if (mfch != NULL)
+			res = MFChannelWaitForNextMessage(mfch, timeout * 1000);
 		else
-			res = poll(&fds, 1, timeout * 1000);
-#else
-		res = poll(&fds, 1, timeout * 1000);
 #endif
+		res = poll(&fds, 1, timeout * 1000);
 		if (res == -1) {
 			if (errno == EINTR)
 				continue;

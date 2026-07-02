@@ -24,6 +24,8 @@
 #include <stdatomic.h>
 
 #ifdef __APPLE__
+#include <time.h>
+
 #include <DiskArbitration/DiskArbitration.h>
 #include <MFMount/MFMount.h>
 #endif
@@ -41,24 +43,177 @@
 
 #ifdef __APPLE__
 /*
- * Unnamed semaphores are not available on macOS. We use dispatch semaphores as
- * fallback.
+ * Unnamed semaphores are not available on macOS. We use the following fallback
+ * instead.
  *
- * Unlike unnamed semaphores, dispatch semaphores are not async-signal safe.
- * This means using dispatch semaphores in signal handlers is not safe. This
- * is not an issue here since we do not use semaphores in signal handlers.
+ * Unlike POSIX semaphores, this fallback is not async-signal safe. Calling
+ * sem_post() from a signal handler is not safe because the implementation uses
+ * pthread mutexes and condition variables internally.
  *
- * Unlike sem_wait(), dispatch_semmaphore_wait() is not interruptible. This is
- * not an issue here since we do not rely on sem_wait() being interruptible.
+ * The fallback also does not wake when a signal is delivered to a thread blocked
+ * in sem_wait(). pthread_cond_wait() does not return EINTR. Code that needs to
+ * notice signals while waiting must use sem_timedwait() or another explicit
+ * wakeup mechanism.
  */
 
-#include <dispatch/dispatch.h>
+struct fuse_sem {
+	unsigned int count;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+};
 
-#define sem_t dispatch_semaphore_t
-#define sem_init(s, p, v) *(s) = dispatch_semaphore_create((v))
-#define sem_post(s) dispatch_semaphore_signal(*(s))
-#define sem_wait(s) dispatch_semaphore_wait(*(s), DISPATCH_TIME_FOREVER)
-#define sem_destroy(s) dispatch_release(*(s))
+typedef struct fuse_sem sem_t;
+
+#define FUSE_SEM_VALUE_MAX ((int32_t)32767)
+
+static inline int fuse_sem_init(sem_t *sem, int pshared, unsigned int value)
+{
+	int err;
+
+	if (pshared) {
+		errno = ENOSYS;
+		return -1;
+	}
+
+	if (value > FUSE_SEM_VALUE_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	sem->count = value;
+	err = pthread_mutex_init(&sem->lock, NULL);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	err = pthread_cond_init(&sem->cond, NULL);
+	if (err != 0) {
+		pthread_mutex_destroy(&sem->lock);
+		errno = err;
+		return -1;
+	}
+
+	return 0;
+}
+
+static inline void fuse_sem_unlock(void *lock)
+{
+	pthread_mutex_unlock((pthread_mutex_t *)lock);
+}
+
+static inline int fuse_sem_destroy(sem_t *sem)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_cond_destroy(&sem->cond);
+	if (err != 0) {
+		errno = err;
+		res = -1;
+	}
+
+	err = pthread_mutex_destroy(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		res = -1;
+	}
+
+	return res;
+}
+
+static inline int fuse_sem_post(sem_t *sem)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_mutex_lock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	if (sem->count < FUSE_SEM_VALUE_MAX) {
+		sem->count++;
+		err = pthread_cond_signal(&sem->cond);
+		if (err != 0) {
+			errno = err;
+			res = -1;
+		}
+	} else {
+		errno = ERANGE;
+		res = -1;
+	}
+
+	err = pthread_mutex_unlock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		res = -1;
+	}
+
+	return res;
+}
+
+static inline int fuse_sem_wait(sem_t *sem)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_mutex_lock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	pthread_cleanup_push(fuse_sem_unlock, &sem->lock);
+
+	while (sem->count == 0 && res == 0)
+		res = pthread_cond_wait(&sem->cond, &sem->lock);
+
+	if (res == 0)
+		sem->count--;
+	else
+		errno = res;
+
+	pthread_cleanup_pop(1);
+
+	return res == 0 ? 0 : -1;
+}
+
+static inline int fuse_sem_timedwait(sem_t *sem,
+				     const struct timespec *abstime)
+{
+	int err;
+	int res = 0;
+
+	err = pthread_mutex_lock(&sem->lock);
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+
+	pthread_cleanup_push(fuse_sem_unlock, &sem->lock);
+
+	while (sem->count == 0 && res == 0)
+		res = pthread_cond_timedwait(&sem->cond, &sem->lock,
+					     abstime);
+
+	if (res == 0)
+		sem->count--;
+	else
+		errno = res;
+
+	pthread_cleanup_pop(1);
+
+	return res == 0 ? 0 : -1;
+}
+
+#define sem_init(s, p, v) fuse_sem_init((s), (p), (v))
+#define sem_post(s) fuse_sem_post((s))
+#define sem_wait(s) fuse_sem_wait((s))
+#define sem_timedwait(s, t) fuse_sem_timedwait((s), (t))
+#define sem_destroy(s) fuse_sem_destroy((s))
+#define SEM_VALUE_MAX FUSE_SEM_VALUE_MAX
 #endif /* __APPLE__ */
 
 struct mount_opts;
@@ -87,7 +242,7 @@ struct fuse_req {
 		} ni;
 	} u;
 #ifdef __APPLE__
-    MFMessageRef mfmsg;
+	MFMessageRef mfmsg;
 #endif
 	struct fuse_req *next;
 	struct fuse_req *prev;
@@ -107,14 +262,33 @@ struct fuse_session_uring {
 	struct fuse_ring_pool *pool;
 };
 
+#ifdef __APPLE__
+enum fuse_darwin_mount_state {
+	FUSE_DARWIN_MOUNT_NONE,
+	FUSE_DARWIN_MOUNT_DELAYED,
+	FUSE_DARWIN_MOUNT_MOUNTING,
+	FUSE_DARWIN_MOUNT_CONNECTING,
+	FUSE_DARWIN_MOUNT_MOUNTED,
+	FUSE_DARWIN_MOUNT_UNMOUNTING,
+	FUSE_DARWIN_MOUNT_UNMOUNTED,
+	FUSE_DARWIN_MOUNT_FAILED,
+};
+#endif
+
 struct fuse_session {
 #ifdef __APPLE__
 	int ctr;
-	DADiskRef disk;
+	pthread_mutex_t ctr_lock;
+	enum fuse_darwin_mount_state mount_state;
+	pthread_cond_t mount_cond;
+	pthread_mutex_t mount_lock;
+	_Atomic bool sig_unmount;
+	_Atomic DADiskRef disk;
+#endif
+	_Atomic(char *)mountpoint;
+#ifdef __APPLE__
 	MFChannelRef mfch;
 	bool mfch_closed;
-#else
-	_Atomic(char *)mountpoint;
 #endif
 	int fd;
 	struct fuse_custom_io *io;
@@ -237,9 +411,24 @@ struct fuse_loop_config
 
 #ifdef __APPLE__
 /**
+ * Mark the process as having started the mount process.
+ *
+ * After this point daemonizing by forking is no longer safe. The marker is
+ * intentionally process-global and sticky.
+ */
+void fuse_darwin_set_mount_started(void);
+
+/**
+ * Check whether the mount process has started.
+ *
+ * @return true if future daemonization must avoid forking
+ */
+bool fuse_darwin_mount_started(void);
+
+/**
  * Obtain counted reference to the session
  *
- * @param ch the session
+ * @param se the session
  * @return the session
  */
 struct fuse_session *fuse_session_get(struct fuse_session *se);
@@ -247,9 +436,29 @@ struct fuse_session *fuse_session_get(struct fuse_session *se);
 /**
  * Drop counted reference to a session
  *
- * @param ch the session
+ * @param se the session
  */
 void fuse_session_put(struct fuse_session *se);
+
+/**
+ * Resolve the MFChannelRef for a session
+ *
+ * On success, @p mfchp receives either the session's MFChannelRef, if the
+ * session is backed by a MFChannelRef, or NULL, if the session falls back to a
+ * file descriptor. On failure, this function returns a negative errno value.
+ *
+ * If the session is backed by an MFChannelRef and the mount has been delayed,
+ * this function starts the mount process and waits for the channel to become
+ * available or for the mount attempt to fail.
+ *
+ * This function must not be used by teardown paths that only need to close or
+ * release an already-created channel.
+ *
+ * @param se the session
+ * @param mfchp receives the session's MFChannelRef, or NULL on fd fallback
+ * @return 0 on success, or a negative errno value on failure
+ */
+int fuse_session_mfch(struct fuse_session *se, MFChannelRef *mfchp);
 #endif
 
 /* ----------------------------------------------------------- *
@@ -277,12 +486,14 @@ void fuse_mount_version(void);
 unsigned get_max_read(struct mount_opts *o);
 
 #ifdef __APPLE__
-void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options);
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options,
+			 DADiskUnmountCallback callback, void *context);
 #else
 void fuse_kern_unmount(const char *mountpoint, int fd);
 #endif
 
 #ifdef __APPLE__
+int fuse_darwin_check_mount_opts(struct mount_opts *mo);
 MFChannelRef fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
 			       void (*callback)(void *, int), void *context);
 #else

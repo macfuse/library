@@ -28,6 +28,22 @@
 #include <errno.h>
 #include <sys/param.h>
 
+#ifdef __APPLE__
+static _Atomic bool fuse_darwin_mount_started_flag;
+
+void fuse_darwin_set_mount_started(void)
+{
+	atomic_store_explicit(&fuse_darwin_mount_started_flag, true,
+			      memory_order_relaxed);
+}
+
+bool fuse_darwin_mount_started(void)
+{
+	return atomic_load_explicit(&fuse_darwin_mount_started_flag,
+				    memory_order_relaxed);
+}
+#endif
+
 #define FUSE_HELPER_OPT(t, p) \
 	{ t, offsetof(struct fuse_cmdline_opts, p), 1 }
 
@@ -264,6 +280,13 @@ int fuse_parse_cmdline_30(struct fuse_args *args,
 
 int fuse_daemonize(int foreground)
 {
+#ifdef __APPLE__
+        if (!foreground && fuse_darwin_mount_started()) {
+            fuse_log(FUSE_LOG_WARNING,
+                     "fuse: daemonize requested after mount started; continuing in foreground\n");
+            foreground = 1;
+        }
+#endif
 	if (!foreground) {
 		int nullfd;
 		int waiter[2];

@@ -42,17 +42,18 @@ if host_machine.system().startswith('netbsd')
    deps += [ cc.find_library('perfuse'),
              cc.find_library('puffs') ]
 elif host_machine.system() == 'darwin'
-   deps += [ cc.find_library('icucore'),
-             dependency('appleframeworks', modules: 'CoreFoundation'),
-             dependency('appleframeworks', modules: 'DiskArbitration'),
-             dependency('appleframeworks', modules: 'MFMount') ]
+   deps += [ cc.find_library('icucore') ]
 else
    # Required for clock_gettime before glibc 2.17
    deps += cc.find_library('rt')
 endif
 
 if host_machine.system() == 'darwin'
-   libfuse_link_args =  []
+   libfuse_link_args =  [
+      '-Wl,-delay_framework,CoreFoundation',
+      '-Wl,-delay_framework,DiskArbitration',
+      '-Wl,-delay_framework,MFMount',
+   ]
 else
    libfuse_link_args += [ '-Wl,--version-script,' + meson.current_source_dir()
                           + '/fuse_versionscript' ]

@@ -49,6 +49,8 @@
 #endif
 
 #ifdef __APPLE__
+#include <time.h>
+
 #include <CoreFoundation/CoreFoundation.h>
 #include <DiskArbitration/DiskArbitration.h>
 #include <MFMount/MFMount.h>
@@ -291,13 +293,13 @@ static struct fuse_req *fuse_ll_alloc_req(struct fuse_session *se)
 }
 
 #ifdef __APPLE__
-static int fuse_send_msg_mfch(struct fuse_session *se, struct iovec *iov,
-			      int count)
+static int fuse_send_msg_mfch(struct fuse_session *se, MFChannelRef mfch,
+			      struct iovec *iov, int count)
 {
 	ssize_t res;
 	int err;
 
-	res = MFChannelSendMessage(se->mfch, iov, count);
+	res = MFChannelSendMessage(mfch, iov, count);
 	if (res == -1) {
 		/* ENOENT means the operation was interrupted */
 		err = errno;
@@ -346,6 +348,9 @@ static int fuse_send_msg(struct fuse_session *se, struct fuse_chan *ch,
 	struct fuse_out_header *out = iov[0].iov_base;
 	int err;
 	bool is_uring = req && req->flags.is_uring ? true : false;
+#ifdef __APPLE__
+	MFChannelRef mfch = NULL;
+#endif
 
 	if (!is_uring)
 		assert(se != NULL);
@@ -368,8 +373,12 @@ static int fuse_send_msg(struct fuse_session *se, struct fuse_chan *ch,
 	}
 
 #if __APPLE__
-	if (se->mfch != NULL)
-		err = fuse_send_msg_mfch(se, iov, count);
+	err = fuse_session_mfch(se, &mfch);
+	if (err != 0)
+		goto out;
+
+	if (mfch != NULL)
+		err = fuse_send_msg_mfch(se, mfch, iov, count);
 	else
 #endif
 	if (is_uring)
@@ -377,6 +386,7 @@ static int fuse_send_msg(struct fuse_session *se, struct fuse_chan *ch,
 	else
 		err = fuse_write_msg_dev(se, ch, iov, count);
 
+out:
 	trace_request_reply(out->unique, out->len, out->error, err);
 	return err;
 }
@@ -3644,18 +3654,22 @@ static void _do_destroy(fuse_req_t req, const fuse_ino_t nodeid,
 			const void *op_in, const void *in_payload)
 {
 	struct fuse_session *se = req->se;
-#ifndef __APPLE__
 	char *mountpoint;
+#ifdef __APPLE__
+	DADiskRef disk;
 #endif
 
 	(void) nodeid;
 	(void)op_in;
 	(void)in_payload;
 
-#ifndef __APPLE__
+#ifdef __APPLE__
+	disk = atomic_exchange(&se->disk, NULL);
+	if (disk != NULL)
+		CFRelease(disk);
+#endif
 	mountpoint = atomic_exchange(&se->mountpoint, NULL);
 	free(mountpoint);
-#endif
 
 	se->got_destroy = 1;
 	se->got_init = 0;
@@ -4586,12 +4600,17 @@ void fuse_lowlevel_help(void)
 #ifdef __APPLE__
 static void fuse_session_close(struct fuse_session *se)
 {
+	MFChannelRef mfch = NULL;
+
 	pthread_mutex_lock(&se->lock);
 	if (se->mfch != NULL && !se->mfch_closed) {
-		MFChannelClose(se->mfch);
+		mfch = se->mfch;
 		se->mfch_closed = true;
 	}
 	pthread_mutex_unlock(&se->lock);
+
+	if (mfch != NULL)
+		MFChannelClose(mfch);
 }
 
 void fuse_session_destroy(struct fuse_session *se)
@@ -4614,9 +4633,6 @@ void fuse_session_destroy(struct fuse_session *se)
 
 #ifdef __APPLE__
 	assert(se->ctr == 0);
-
-	if (se->disk != NULL)
-		CFRelease(se->disk);
 	fuse_session_close(se);
 #else
 	if (se->got_init && !se->got_destroy) {
@@ -4630,6 +4646,11 @@ void fuse_session_destroy(struct fuse_session *se)
 	pthread_key_delete(se->pipe_key);
 	sem_destroy(&se->mt_finish);
 	pthread_mutex_destroy(&se->mt_lock);
+#ifdef __APPLE__
+	pthread_cond_destroy(&se->mount_cond);
+	pthread_mutex_destroy(&se->mount_lock);
+	pthread_mutex_destroy(&se->ctr_lock);
+#endif
 	pthread_mutex_destroy(&se->lock);
 	free(se->cuse_data);
 #ifdef __APPLE__
@@ -4709,6 +4730,7 @@ static int _fuse_session_receive_buf(struct fuse_session *se,
 	int err;
 	ssize_t res;
 #ifdef __APPLE__
+	MFChannelRef mfch = NULL;
 	MFMessageRef mfmsg = NULL;
 #endif
 	size_t bufsize;
@@ -4838,8 +4860,12 @@ pipe_retry:
 fallback:
 #endif
 	bufsize = internal ? buf->mem_size : se->bufsize;
+
 #ifdef __APPLE__
-	if (se->mfch != NULL)
+	err = fuse_session_mfch(se, &mfch);
+	if (err != 0)
+		return err;
+	if (mfch != NULL)
 		goto restart;
 #endif
 	if (!buf->mem) {
@@ -4857,8 +4883,8 @@ fallback:
 
 restart:
 #ifdef __APPLE__
-	if (se->mfch != NULL) {
-		mfmsg = MFChannelCopyNextMessage(se->mfch);
+	if (mfch != NULL) {
+		mfmsg = MFChannelCopyNextMessage(mfch);
 		if (mfmsg == NULL) {
 			res = -1;
 		} else {
@@ -5069,6 +5095,10 @@ fuse_session_new_versioned(struct fuse_args *args,
 	list_init_req(&se->interrupts);
 	list_init_nreq(&se->notify_list);
 	se->notify_ctr = 1;
+#ifdef __APPLE__
+	pthread_mutex_init(&se->ctr_lock, NULL);
+	pthread_mutex_init(&se->mount_lock, NULL);
+#endif
 	pthread_mutex_init(&se->lock, NULL);
 	sem_init(&se->mt_finish, 0, 0);
 	pthread_mutex_init(&se->mt_lock, NULL);
@@ -5079,6 +5109,15 @@ fuse_session_new_versioned(struct fuse_args *args,
 			strerror(err));
 		goto out5;
 	}
+
+#ifdef __APPLE__
+	err = pthread_cond_init(&se->mount_cond, NULL);
+	if (err) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to create mount condition: %s\n",
+			strerror(err));
+		goto out6;
+	}
+#endif
 
 	memcpy(&se->op, op, op_size);
 	se->owner = getuid();
@@ -5095,10 +5134,18 @@ fuse_session_new_versioned(struct fuse_args *args,
 
 	return se;
 
+#ifdef __APPLE__
+out6:
+	pthread_key_delete(se->pipe_key);
+#endif
 out5:
 	sem_destroy(&se->mt_finish);
 	pthread_mutex_destroy(&se->mt_lock);
 	pthread_mutex_destroy(&se->lock);
+#ifdef __APPLE__
+	pthread_mutex_destroy(&se->mount_lock);
+	pthread_mutex_destroy(&se->ctr_lock);
+#endif
 out4:
 	fuse_opt_free_args(args);
 out3:
@@ -5142,9 +5189,9 @@ struct fuse_session *fuse_session_new_30(struct fuse_args *args,
 struct fuse_session *fuse_session_get(struct fuse_session *se)
 {
 	assert(se->ctr > 0);
-	pthread_mutex_lock(&se->lock);
+	pthread_mutex_lock(&se->ctr_lock);
 	se->ctr++;
-	pthread_mutex_unlock(&se->lock);
+	pthread_mutex_unlock(&se->ctr_lock);
 
 	return se;
 }
@@ -5153,13 +5200,13 @@ void fuse_session_put(struct fuse_session *se)
 {
 	if (se == NULL)
 		return;
-	pthread_mutex_lock(&se->lock);
+	pthread_mutex_lock(&se->ctr_lock);
 	se->ctr--;
 	if (!se->ctr) {
-		pthread_mutex_unlock(&se->lock);
+		pthread_mutex_unlock(&se->ctr_lock);
 		fuse_session_destroy_real(se);
 	} else
-		pthread_mutex_unlock(&se->lock);
+		pthread_mutex_unlock(&se->ctr_lock);
 }
 #endif
 
@@ -5214,37 +5261,58 @@ int fuse_session_custom_io_30(struct fuse_session *se,
 }
 
 #ifdef __APPLE__
-static DASessionRef fuse_session_dasession;
+static pthread_mutex_t fuse_darwin_dasession_lock = PTHREAD_MUTEX_INITIALIZER;
+static DASessionRef fuse_darwin_dasession;
 
-__attribute__((constructor))
-static void fuse_session_dasession_init(void)
+static DASessionRef fuse_darwin_copy_dasession(void)
 {
-	fuse_session_dasession = DASessionCreate(NULL);
+	DASessionRef session = NULL;
+
+	pthread_mutex_lock(&fuse_darwin_dasession_lock);
+	if (fuse_darwin_dasession == NULL)
+		fuse_darwin_dasession = DASessionCreate(NULL);
+	if (fuse_darwin_dasession != NULL)
+		session = (DASessionRef)CFRetain(fuse_darwin_dasession);
+	pthread_mutex_unlock(&fuse_darwin_dasession_lock);
+
+	return session;
 }
 
 __attribute__((destructor))
-static void fuse_session_dasession_destroy(void)
+static void fuse_darwin_dasession_destroy(void)
 {
-	CFRelease(fuse_session_dasession);
+	DASessionRef session;
+
+	pthread_mutex_lock(&fuse_darwin_dasession_lock);
+	session = fuse_darwin_dasession;
+	fuse_darwin_dasession = NULL;
+	pthread_mutex_unlock(&fuse_darwin_dasession_lock);
+
+	if (session != NULL)
+		CFRelease(session);
 }
 
 struct fuse_session_mount_context {
-	pthread_mutex_t lock;
-	char mountpoint[MAXPATHLEN];
+	char *mountpoint;
 	struct fuse_session *se;
 };
 
 static struct fuse_session_mount_context *
 fuse_session_mount_context_new(const char *mountpoint, struct fuse_session *se)
 {
-	struct fuse_session_mount_context *mc =
-		calloc(1, sizeof(struct fuse_session_mount_context));
+	struct fuse_session_mount_context *mc;
+
+	mc = calloc(1, sizeof(struct fuse_session_mount_context));
 	if (mc == NULL) {
 		return NULL;
 	}
 
-	pthread_mutex_init(&mc->lock, NULL);
-	stpncpy(mc->mountpoint, mountpoint, sizeof(mc->mountpoint));
+	mc->mountpoint = strdup(mountpoint);
+	if (mc->mountpoint == NULL) {
+		free(mc);
+		return NULL;
+	}
+
 	mc->se = fuse_session_get(se);
 	return mc;
 }
@@ -5252,7 +5320,7 @@ fuse_session_mount_context_new(const char *mountpoint, struct fuse_session *se)
 static void
 fuse_session_mount_context_destroy(struct fuse_session_mount_context *mc)
 {
-	pthread_mutex_destroy(&mc->lock);
+	free(mc->mountpoint);
 	if (mc->se)
 		fuse_session_put(mc->se);
 	free(mc);
@@ -5266,42 +5334,142 @@ fuse_session_mount_context_destroy(struct fuse_session_mount_context *mc)
  */
 static void fuse_session_mount_callback(void *context, int status)
 {
-	struct fuse_session_mount_context *mc =
-		(struct fuse_session_mount_context *)context;
+	struct fuse_session_mount_context *mc;
+	DASessionRef dasession = NULL;
 	CFURLRef url = NULL;
 	DADiskRef disk = NULL;
 
-	pthread_mutex_lock(&mc->lock);
+	mc = (struct fuse_session_mount_context *)context;
 
 	if (status != 0) {
 		fuse_log(FUSE_LOG_ERR, "fuse: mount failed with error: %d\n",
 			 status);
-		goto err_out;
+		goto state;
+	}
+
+	dasession = fuse_darwin_copy_dasession();
+	if (dasession == NULL) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to create DASessionRef\n");
+		goto state;
 	}
 
 	url = CFURLCreateFromFileSystemRepresentation(
 		NULL, (const UInt8 *)mc->mountpoint, strlen(mc->mountpoint),
 		TRUE);
-	disk = DADiskCreateFromVolumePath(NULL, fuse_session_dasession, url);
-	CFRelease(url);
-
-	if (!disk) {
-		fuse_log(FUSE_LOG_ERR, "fuse: failed to create DADiskRef\n");
-		goto err_out;
+	if (url == NULL) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to create CFURLRef\n");
+		goto state;
 	}
 
-	pthread_mutex_lock(&mc->se->lock);
-	mc->se->disk = disk;
-	pthread_mutex_unlock(&mc->se->lock);
+	disk = DADiskCreateFromVolumePath(NULL, dasession, url);
+	if (disk == NULL) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to create DADiskRef\n");
+		goto state;
+	}
+
+state:
+	pthread_mutex_lock(&mc->se->mount_lock);
+	while (true) {
+		switch (mc->se->mount_state) {
+		case FUSE_DARWIN_MOUNT_NONE:
+		case FUSE_DARWIN_MOUNT_DELAYED:
+		case FUSE_DARWIN_MOUNT_MOUNTED:
+		case FUSE_DARWIN_MOUNT_UNMOUNTING:
+		case FUSE_DARWIN_MOUNT_FAILED:
+			pthread_mutex_unlock(&mc->se->mount_lock);
+			fuse_log(FUSE_LOG_ERR, "fuse: illegal mount state\n");
+			abort();
+
+		case FUSE_DARWIN_MOUNT_UNMOUNTED:
+			pthread_mutex_unlock(&mc->se->mount_lock);
+
+			if (disk != NULL) {
+				/*
+				 * fuse_session_unmount() was called, and the
+				 * session exited while the volume was still in
+				 * the process of being mounted. We need to
+				 * unmount the volume.
+				 */
+
+				fuse_darwin_unmount(disk,
+						    kDADiskUnmountOptionForce,
+						    NULL, NULL);
+				CFRelease(disk);
+			}
+			goto out;
+
+		case FUSE_DARWIN_MOUNT_MOUNTING:
+			/*
+			 * The callback may run before the channel has been
+			 * registered with the session. Wait for the mount state
+			 * to settle.
+			 */
+			pthread_cond_wait(&mc->se->mount_cond,
+					  &mc->se->mount_lock);
+			break;
+
+		case FUSE_DARWIN_MOUNT_CONNECTING:
+			if (disk == NULL) {
+				mc->se->mount_state = FUSE_DARWIN_MOUNT_FAILED;
+				pthread_cond_broadcast(&mc->se->mount_cond);
+				pthread_mutex_unlock(&mc->se->mount_lock);
+
+				fuse_session_close(mc->se);
+			} else {
+				atomic_store(&mc->se->disk, disk);
+
+				mc->se->mount_state = FUSE_DARWIN_MOUNT_MOUNTED;
+				pthread_cond_broadcast(&mc->se->mount_cond);
+				pthread_mutex_unlock(&mc->se->mount_lock);
+			}
+			goto out;
+		}
+	}
 
 out:
-	pthread_mutex_unlock(&mc->lock);
-	fuse_session_mount_context_destroy(mc);
-	return;
+	if (url != NULL)
+		CFRelease(url);
+	if (dasession != NULL)
+		CFRelease(dasession);
 
-err_out:
-	fuse_session_close(mc->se);
-	goto out;
+	fuse_session_mount_context_destroy(mc);
+}
+
+static MFChannelRef fuse_session_mount_real(struct fuse_session *se)
+{
+	MFChannelRef mfch = NULL;
+	struct fuse_session_mount_context *mc = NULL;
+	char *mountpoint = NULL;
+	int err = 0;
+
+	mountpoint = strdup(se->mountpoint);
+	if (mountpoint == NULL) {
+		err = errno != 0 ? errno : ENOMEM;
+		goto out;
+	}
+
+	mc = fuse_session_mount_context_new(mountpoint, se);
+	if (mc == NULL) {
+		err = errno != 0 ? errno : ENOMEM;
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to allocate mount context\n");
+		goto out;
+	}
+
+	mfch = fuse_darwin_mount(mountpoint, se->mo,
+				 &fuse_session_mount_callback, mc);
+	if (mfch == NULL) {
+		err = ENODEV;
+		fuse_session_mount_context_destroy(mc);
+		goto out;
+	}
+
+out:
+	free(mountpoint);
+	if (err != 0) {
+		errno = err;
+	}
+	return mfch;
 }
 #endif
 
@@ -5309,10 +5477,6 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 {
 	int fd;
 	char *mountpoint;
-#ifdef __APPLE__
-	MFChannelRef mfch;
-	struct fuse_session_mount_context *mc;
-#endif
 
 	if (_mountpoint == NULL) {
 		fuse_log(FUSE_LOG_ERR, "Invalid null-ptr mountpoint!\n");
@@ -5337,42 +5501,28 @@ int fuse_session_mount(struct fuse_session *se, const char *_mountpoint)
 	} while (fd >= 0 && fd <= 2);
 
 #ifdef __APPLE__
-	mc = fuse_session_mount_context_new(mountpoint, se);
-	if (mc == NULL) {
-		fuse_log(FUSE_LOG_ERR,
-			 "fuse: failed to allocate mount context\n");
+	if (fuse_darwin_check_mount_opts(se->mo) != 0)
 		goto error_out;
-	}
-
-	pthread_mutex_lock(&mc->lock);
 
 	/*
-	 * Note: Keep the mount context locked until the channel has been
-	 * registered with the session. Otherwise, a concurrent mount failure
-	 * could race with registration and leave the channel open.
+	 * We need to delay the actual mount operation until after the process
+	 * has daemonized. On macOS, daemonizing the process severs the
+	 * connection between the file system extension and the file system
+	 * server.
 	 */
 
-	/* Open channel */
-	mfch = fuse_darwin_mount(mountpoint, se->mo,
-				 &fuse_session_mount_callback, mc);
-	if (!mfch) {
-		pthread_mutex_unlock(&mc->lock);
-
-		/* fuse_session_mount_callback() is not going to be called */
-		fuse_session_mount_context_destroy(mc);
+	pthread_mutex_lock(&se->mount_lock);
+	if (se->mount_state != FUSE_DARWIN_MOUNT_NONE) {
+		pthread_mutex_unlock(&se->mount_lock);
+		fuse_log(FUSE_LOG_ERR, "fuse: session is already mounted\n");
 		goto error_out;
 	}
 
-	pthread_mutex_lock(&se->lock);
-	se->mfch = MFRetain(mfch);
-	se->mfch_closed = false;
-	pthread_mutex_unlock(&se->lock);
+	se->mountpoint = mountpoint;
 
-	se->fd = -1;
-
-	pthread_mutex_unlock(&mc->lock);
-
-	MFRelease(mfch);
+	se->mount_state = FUSE_DARWIN_MOUNT_DELAYED;
+	pthread_cond_broadcast(&se->mount_cond);
+	pthread_mutex_unlock(&se->mount_lock);
 #else
 	/*
 	 * To allow FUSE daemons to run without privileges, the caller may open
@@ -5409,56 +5559,322 @@ error_out:
 	return -1;
 }
 
+#ifdef __APPLE__
+int fuse_session_mfch(struct fuse_session *se, MFChannelRef *mfchp)
+{
+	int err = 0;
+	MFChannelRef mfch = NULL;
+
+	assert(mfchp != NULL);
+	*mfchp = NULL;
+
+	pthread_mutex_lock(&se->mount_lock);
+	while (true) {
+		switch (se->mount_state) {
+		case FUSE_DARWIN_MOUNT_NONE:
+			pthread_mutex_unlock(&se->mount_lock);
+			return 0;
+
+		case FUSE_DARWIN_MOUNT_DELAYED:
+			fuse_darwin_set_mount_started();
+			se->mount_state = FUSE_DARWIN_MOUNT_MOUNTING;
+			pthread_cond_broadcast(&se->mount_cond);
+			pthread_mutex_unlock(&se->mount_lock);
+
+			mfch = fuse_session_mount_real(se);
+			if (mfch == NULL)
+				err = errno != 0 ? errno : ENODEV;
+
+			pthread_mutex_lock(&se->mount_lock);
+			if (se->mount_state != FUSE_DARWIN_MOUNT_MOUNTING) {
+				pthread_mutex_unlock(&se->mount_lock);
+				if (mfch != NULL) {
+					MFChannelClose(mfch);
+					MFRelease(mfch);
+				}
+				pthread_mutex_lock(&se->mount_lock);
+				break;
+			}
+			if (mfch == NULL) {
+				se->mount_state = FUSE_DARWIN_MOUNT_FAILED;
+				pthread_cond_broadcast(&se->mount_cond);
+				pthread_mutex_unlock(&se->mount_lock);
+				return -err;
+			}
+
+			pthread_mutex_lock(&se->lock);
+			se->mfch = mfch;
+			se->mfch_closed = false;
+			se->fd = -1;
+			pthread_mutex_unlock(&se->lock);
+
+			se->mount_state = FUSE_DARWIN_MOUNT_CONNECTING;
+			pthread_cond_broadcast(&se->mount_cond);
+			break;
+
+		case FUSE_DARWIN_MOUNT_MOUNTING:
+			pthread_cond_wait(&se->mount_cond, &se->mount_lock);
+			break;
+
+		case FUSE_DARWIN_MOUNT_CONNECTING:
+		case FUSE_DARWIN_MOUNT_MOUNTED:
+		case FUSE_DARWIN_MOUNT_UNMOUNTING:
+			pthread_mutex_unlock(&se->mount_lock);
+			*mfchp = se->mfch;
+			return 0;
+
+		case FUSE_DARWIN_MOUNT_FAILED:
+		case FUSE_DARWIN_MOUNT_UNMOUNTED:
+			pthread_mutex_unlock(&se->mount_lock);
+			return -EBADF;
+		}
+	}
+}
+#endif
+
 int fuse_session_fd(struct fuse_session *se)
 {
 #ifdef __APPLE__
-	if (se->mfch != NULL)
-		return MFChannelGetFileDescriptor(se->mfch);
+	MFChannelRef mfch = NULL;
+
+	if (fuse_session_mfch(se, &mfch) != 0)
+		return -1;
+	if (mfch != NULL)
+		return MFChannelGetFileDescriptor(mfch);
 #endif
 	return se->fd;
 }
 
-void fuse_session_unmount(struct fuse_session *se)
-{
 #ifdef __APPLE__
-	DADiskRef disk = NULL;
+static void fuse_session_unmount_callback(DADiskRef disk,
+					  DADissenterRef dissenter,
+					  void *context)
+{
+	(void)disk;
+	DAReturn *unmount_status = (DAReturn *)context;
+
+	if (dissenter == NULL)
+		*unmount_status = kDAReturnSuccess;
+	else
+		*unmount_status = DADissenterGetStatus(dissenter);
+
+	CFRunLoopStop(CFRunLoopGetCurrent());
+}
+
+static bool fuse_session_unmount_real(struct fuse_session *se)
+{
 	bool exited = fuse_session_exited(se);
+	DADiskRef disk;
+	DASessionRef dasession;
+	DADiskUnmountOptions unmount_opts = kDADiskUnmountOptionDefault;
+	DAReturn unmount_status = kDAReturnError;
 
 	if (exited) {
 		/*
-		 * Note: The session has exited and no new incoming messages
-		 * will be processed. A graceful unmount is no longer possible.
-		 * There is no need to the backend to wait on replies that will
-		 * never arrive.
+		 * The session exited, incoming messages will no longer be
+		 * processed. A graceful unmount is no longer possible. Let the
+		 * backend know that the server is gone.
 		 */
-
+		unmount_opts |= kDADiskUnmountOptionForce;
 		fuse_session_close(se);
 	}
 
-	pthread_mutex_lock(&se->lock);
-	disk = se->disk;
-	se->disk = NULL;
-	pthread_mutex_unlock(&se->lock);
+	disk = atomic_exchange(&se->disk, NULL);
+	if (disk == NULL)
+		return true;
 
-	/*
-	 * Note: After mount(2) completes, we attach the volume's DADiskRef to
-	 * the session. If obtaining the DADiskRef fails, we close the
-	 * MFChannelRef.
-	 *
-	 * When se->disk is NULL, the session was never mounted, mount(2) has
-	 * not returned yet, or fuse_session_unmount() has already been called.
-	 * In these cases, calling fuse_session_unmount() is a no-op.
-	 */
-
-	if (disk != NULL) {
-		DADiskUnmountOptions options = kDADiskUnmountOptionDefault;
-		if (exited)
-			options |= kDADiskUnmountOptionForce;
-
-		fuse_darwin_unmount(disk, options);
-		CFRelease(disk);
+	dasession = fuse_darwin_copy_dasession();
+	if (dasession == NULL) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to create DASessionRef\n");
+		goto err_out;
 	}
+
+	DASessionScheduleWithRunLoop(dasession, CFRunLoopGetCurrent(),
+				     kCFRunLoopDefaultMode);
+	fuse_darwin_unmount(disk, unmount_opts, fuse_session_unmount_callback,
+			    &unmount_status);
+	CFRunLoopRun();
+	DASessionUnscheduleFromRunLoop(dasession, CFRunLoopGetCurrent(),
+				       kCFRunLoopDefaultMode);
+	CFRelease(dasession);
+
+	if (unmount_status != kDAReturnSuccess) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to unmount DADiskRef\n");
+		goto err_out;
+	}
+
+	fuse_session_close(se);
+	CFRelease(disk);
+	return true;
+
+err_out:
+	if (exited) {
+		CFRelease(disk);
+		return true;
+	} else {
+		atomic_store(&se->disk, disk);
+		return false;
+	}
+}
+
+static void *fuse_session_unmount_thread(void *data)
+{
+	struct fuse_session *se = (struct fuse_session *)data;
+	int res;
+	struct timespec timeout;
+	bool unmounted;
+	char *mountpoint;
+
+	pthread_mutex_lock(&se->mount_lock);
+	while (true) {
+		switch (se->mount_state) {
+		case FUSE_DARWIN_MOUNT_NONE:
+		case FUSE_DARWIN_MOUNT_FAILED:
+		case FUSE_DARWIN_MOUNT_UNMOUNTED:
+			pthread_mutex_unlock(&se->mount_lock);
+			goto out;
+
+		case FUSE_DARWIN_MOUNT_DELAYED:
+			se->mount_state = FUSE_DARWIN_MOUNT_UNMOUNTED;
+			pthread_cond_broadcast(&se->mount_cond);
+			pthread_mutex_unlock(&se->mount_lock);
+			goto out;
+
+		case FUSE_DARWIN_MOUNT_MOUNTING:
+			pthread_cond_wait(&se->mount_cond, &se->mount_lock);
+			break;
+
+		case FUSE_DARWIN_MOUNT_CONNECTING:
+			if (atomic_load_explicit(&se->mt_exited,
+						 memory_order_relaxed)) {
+				se->mount_state = FUSE_DARWIN_MOUNT_UNMOUNTED;
+				pthread_cond_broadcast(&se->mount_cond);
+				pthread_mutex_unlock(&se->mount_lock);
+
+				fuse_session_close(se);
+				goto out;
+			}
+
+			res = clock_gettime(CLOCK_REALTIME, &timeout);
+			assert(res == 0);
+
+			timeout.tv_sec++;
+			pthread_cond_timedwait(&se->mount_cond, &se->mount_lock,
+					       &timeout);
+			break;
+
+		case FUSE_DARWIN_MOUNT_MOUNTED:
+			se->mount_state = FUSE_DARWIN_MOUNT_UNMOUNTING;
+			pthread_cond_broadcast(&se->mount_cond);
+			pthread_mutex_unlock(&se->mount_lock);
+
+			unmounted = fuse_session_unmount_real(se);
+
+			pthread_mutex_lock(&se->mount_lock);
+			assert(se->mount_state == FUSE_DARWIN_MOUNT_UNMOUNTING);
+
+			if (!unmounted) {
+				se->mount_state = FUSE_DARWIN_MOUNT_MOUNTED;
+				pthread_cond_broadcast(&se->mount_cond);
+				pthread_mutex_unlock(&se->mount_lock);
+				goto err_out;
+			}
+
+			se->mount_state = FUSE_DARWIN_MOUNT_UNMOUNTED;
+			pthread_cond_broadcast(&se->mount_cond);
+			pthread_mutex_unlock(&se->mount_lock);
+			goto out;
+
+		case FUSE_DARWIN_MOUNT_UNMOUNTING:
+			pthread_cond_wait(&se->mount_cond, &se->mount_lock);
+			break;
+		}
+	}
+
+out:
+	mountpoint = atomic_exchange(&se->mountpoint, NULL);
+	free(mountpoint);
+err_out:
+	fuse_session_put(se);
+	return NULL;
+}
+
+static void fuse_session_start_unmount_thread(struct fuse_session *se)
+{
+	pthread_attr_t attr;
+	pthread_t thread;
+	int err;
+
+	se = fuse_session_get(se);
+
+	err = pthread_attr_init(&attr);
+	if (err != 0) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to create unmount thread attributes: %s\n",
+			 strerror(err));
+		fuse_session_put(se);
+		return;
+	}
+
+	err = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	if (err != 0) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to detach unmount thread: %s\n",
+			 strerror(err));
+		pthread_attr_destroy(&attr);
+		fuse_session_put(se);
+		return;
+	}
+
+	err = pthread_create(&thread, &attr, fuse_session_unmount_thread, se);
+	pthread_attr_destroy(&attr);
+	if (err != 0) {
+		fuse_log(FUSE_LOG_ERR,
+			 "fuse: failed to create unmount thread: %s\n",
+			 strerror(err));
+		fuse_session_put(se);
+	}
+}
+
+void fuse_session_unmount(struct fuse_session *se)
+{
+	char *mountpoint;
+
+	pthread_mutex_lock(&se->mount_lock);
+	while (true) {
+		switch (se->mount_state) {
+		case FUSE_DARWIN_MOUNT_NONE:
+		case FUSE_DARWIN_MOUNT_FAILED:
+		case FUSE_DARWIN_MOUNT_UNMOUNTED:
+			pthread_mutex_unlock(&se->mount_lock);
+			goto out;
+
+		case FUSE_DARWIN_MOUNT_DELAYED:
+			se->mount_state = FUSE_DARWIN_MOUNT_UNMOUNTED;
+			pthread_cond_broadcast(&se->mount_cond);
+			pthread_mutex_unlock(&se->mount_lock);
+			goto out;
+
+		case FUSE_DARWIN_MOUNT_MOUNTING:
+		case FUSE_DARWIN_MOUNT_CONNECTING:
+		case FUSE_DARWIN_MOUNT_MOUNTED:
+			pthread_mutex_unlock(&se->mount_lock);
+			fuse_session_start_unmount_thread(se);
+			return;
+
+		case FUSE_DARWIN_MOUNT_UNMOUNTING:
+			pthread_mutex_unlock(&se->mount_lock);
+			return;
+		}
+	}
+
+out:
+	mountpoint = atomic_exchange(&se->mountpoint, NULL);
+	free(mountpoint);
+}
 #else
+void fuse_session_unmount(struct fuse_session *se)
+{
 	if (se->mountpoint != NULL) {
 		char *mountpoint = atomic_exchange(&se->mountpoint, NULL);
 
@@ -5466,8 +5882,8 @@ void fuse_session_unmount(struct fuse_session *se)
 		se->fd = -1;
 		free(mountpoint);
 	}
-#endif
 }
+#endif
 
 #ifdef linux
 int fuse_req_getgroups(fuse_req_t req, int size, gid_t list[])
@@ -5554,6 +5970,9 @@ void fuse_session_reset(struct fuse_session *se)
 {
 	se->mt_exited = false;
 	se->error = 0;
+#ifdef __APPLE__
+	atomic_store_explicit(&se->sig_interrupt, false, memory_order_relaxed);
+#endif
 }
 
 __attribute__((no_sanitize_thread))
@@ -5561,6 +5980,11 @@ int fuse_session_exited(struct fuse_session *se)
 {
 	bool exited =
 		atomic_load_explicit(&se->mt_exited, memory_order_relaxed);
-
+#ifdef __APPLE__
+	if (atomic_exchange_explicit(&se->sig_unmount, false,
+				     memory_order_relaxed)) {
+		fuse_session_unmount(se);
+	}
+#endif
 	return exited ? 1 : 0;
 }

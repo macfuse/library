@@ -356,6 +356,16 @@ static int fuse_loop_start_thread(struct fuse_mt *mt)
 	w->mt = mt;
 
 	w->ch = NULL;
+#ifdef __APPLE__
+	if (mt->clone_fd && mt->se->io == NULL) {
+		/*
+		 * Note: clone_fd is only relevant for the custom I/O path on
+		 * macOS. MFMount backed mounts do not expose a clonable file
+		 * descriptor.
+		 */
+		mt->clone_fd = 0;
+	}
+#endif
 	if (mt->clone_fd) {
 		w->ch = fuse_clone_chan(mt);
 		if(!w->ch) {
@@ -389,6 +399,23 @@ static void fuse_join_worker(struct fuse_mt *mt, struct fuse_worker *w)
 	fuse_chan_put(w->ch);
 	free(w);
 }
+
+#ifdef __APPLE__
+static void fuse_session_interrupt_mfch(struct fuse_session *se)
+{
+	MFChannelRef mfch = NULL;
+
+	pthread_mutex_lock(&se->lock);
+	if (se->mfch != NULL && !se->mfch_closed)
+		mfch = (MFChannelRef)MFRetain(se->mfch);
+	pthread_mutex_unlock(&se->lock);
+
+	if (mfch != NULL) {
+		(void)MFChannelInterrupt(mfch);
+		MFRelease(mfch);
+	}
+}
+#endif
 
 int fuse_session_loop_mt_312(struct fuse_session *se, struct fuse_loop_config *config);
 FUSE_SYMVER("fuse_session_loop_mt_312", "fuse_session_loop_mt@@FUSE_3.12")
@@ -425,8 +452,24 @@ int err;
 	err = fuse_loop_start_thread(&mt);
 	pthread_mutex_unlock(&se->mt_lock);
 	if (!err) {
+#ifdef __APPLE__
+		while (!fuse_session_exited(se)) {
+			struct timespec timeout;
+
+			err = clock_gettime(CLOCK_REALTIME, &timeout);
+			if (err == -1) {
+				sem_wait(&se->mt_finish);
+				continue;
+			}
+
+			timeout.tv_sec += 1;
+			while (sem_timedwait(&se->mt_finish, &timeout) == -1 &&
+			       errno == EINTR);
+		}
+#else
 		while (!fuse_session_exited(se))
 			sem_wait(&se->mt_finish);
+#endif
 		if (se->debug)
 			fuse_log(FUSE_LOG_DEBUG,
 				 "fuse: session exited, terminating workers\n");
@@ -435,6 +478,10 @@ int err;
 		for (w = mt.main.next; w != &mt.main; w = w->next)
 			pthread_cancel(w->thread_id);
 		pthread_mutex_unlock(&se->mt_lock);
+
+#ifdef __APPLE__
+		fuse_session_interrupt_mfch(se);
+#endif
 
 		while (mt.main.next != &mt.main)
 			fuse_join_worker(&mt, mt.main.next);

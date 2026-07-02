@@ -243,10 +243,11 @@ static int fuse_mount_opt_proc(void *data, const char *arg, int key,
 	return 1;
 }
 
-void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options)
+void fuse_darwin_unmount(DADiskRef disk, DADiskUnmountOptions options,
+			 DADiskUnmountCallback callback, void *context)
 {
 	if (disk)
-		DADiskUnmount(disk, options, NULL, NULL);
+		DADiskUnmount(disk, options, callback, context);
 }
 
 /*
@@ -321,7 +322,7 @@ static void *fuse_mount_core_wait(void *arg)
 	if (rv == -1 || rv == 0) {
 		/*
 		 * We did not receive a mount status, but we still need to
-		 * invoke the callback, otherweise we might leak a->context.
+		 * invoke the callback, otherwise we might leak a->context.
 		 * Assume the mount operation failed with an unknown error.
 		 */
 		status = -1;
@@ -331,51 +332,99 @@ static void *fuse_mount_core_wait(void *arg)
 	a->callback(a->context, status);
 
 out:
+	close(a->fd);
 	free(arg);
 	return NULL;
 }
 
-static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
-			   void (*callback)(void *, int), void *context)
+static int fuse_mount_core_start_wait(int fd,
+				      void (*callback)(void *context, int res),
+				      void *context)
 {
-	int fd = -1;
-	int result;
-	char *mount_tool_path;
-	int fds[2];
-	pid_t pid;
-	int status;
+	int res = -1;
+	pthread_t mount_wait_thread;
 
-	if (!mountpoint) {
-		fuse_log(FUSE_LOG_ERR,
-			 "fuse: missing or invalid mount point\n");
+	struct fuse_mount_core_wait_arg *arg =
+		calloc(1, sizeof(struct fuse_mount_core_wait_arg));
+	if (arg == NULL)
+		return -1;
+
+	arg->fd = fd;
+	arg->callback = callback;
+	arg->context = context;
+
+	res = fuse_start_thread(&mount_wait_thread,
+				&fuse_mount_core_wait, (void *)arg);
+	if (res) {
+		free(arg);
 		return -1;
 	}
 
-	signal(SIGCHLD, SIG_DFL); /* So that we can wait4() below. */
+	pthread_detach(mount_wait_thread);
+	return 0;
+}
 
-	if (getenv("FUSE_NO_MOUNT") || ! mountpoint) {
-		goto out;
+static int fuse_mount_core_reap_launcher(pid_t pid)
+{
+	int status;
+	pid_t res;
+
+	do {
+		res = waitpid(pid, &status, 0);
+	} while (res == -1 && errno == EINTR);
+
+	if (res == -1 && errno == ECHILD)
+		return 0;
+	if (res == -1)
+		return -1;
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static MFChannelRef fuse_mount_core(const char *mountpoint,
+				    struct mount_opts *mo,
+				    void (*callback)(void *, int),
+				    void *context)
+{
+	int fd;
+	char *mount_tool_path;
+	int fds[2];
+	MFChannelRef mfch;
+	pid_t pid;
+
+	if (getenv("FUSE_NO_MOUNT")) {
+		return NULL;
+	}
+
+	if (!mountpoint) {
+		fuse_log(FUSE_LOG_ERR, "fuse: missing mount point\n");
+		return NULL;
 	}
 
 	mount_tool_path = fuse_darwin_resource_path(FUSE_MOUNT_PROG);
 	if (!mount_tool_path) {
 		fuse_log(FUSE_LOG_ERR, "fuse: mount program missing\n");
-		return -1;
+		return NULL;
 	}
 
-	result = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-	if (result == -1) {
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == -1) {
 		fuse_log(FUSE_LOG_ERR, "fuse: socketpair() failed\n");
-		return -1;
+		free(mount_tool_path);
+		return NULL;
 	}
 
 	pid = fork();
 
 	if (pid == -1) {
 		fuse_log(FUSE_LOG_ERR, "fuse: fork failed\n");
+		free(mount_tool_path);
 		close(fds[0]);
 		close(fds[1]);
-		return -1;
+		return NULL;
 	}
 
 	if (pid == 0) {
@@ -428,44 +477,40 @@ static int fuse_mount_core(const char *mountpoint, struct mount_opts *mo,
 	}
 
 	free(mount_tool_path);
-
 	close(fds[0]);
+
+	if (fuse_mount_core_reap_launcher(pid) != 0) {
+		fuse_log(FUSE_LOG_ERR, "fuse: failed to start mount helper\n");
+		close(fds[1]);
+		return NULL;
+	}
+
 	fd = receive_fd(fds[1]);
-
-	if (fd != -1 && callback) {
-		int res = -1;
-		pthread_t mount_wait_thread;
-
-		struct fuse_mount_core_wait_arg *arg =
-			calloc(1, sizeof(struct fuse_mount_core_wait_arg));
-		arg->fd = fds[1];
-		arg->callback = callback;
-		arg->context = context;
-
-		res = fuse_start_thread(&mount_wait_thread,
-					&fuse_mount_core_wait, (void *)arg);
-		if (res) {
-			fuse_log(FUSE_LOG_ERR,
-				 "fuse: failed to wait for mount status\n");
-			goto mount_err_out;
-		}
-
-		pthread_detach(mount_wait_thread);
+	if (fd == -1) {
+		close(fds[1]);
+		return NULL;
 	}
 
-	if (waitpid(pid, &status, 0) == -1 || WEXITSTATUS(status) != 0) {
-		fuse_log(FUSE_LOG_ERR, "fuse: failed to mount file system\n");
-		goto mount_err_out;
+	mfch = MFChannelCreateWithDeviceFileDescriptor(fd);
+	if (mfch == NULL) {
+		close(fds[1]);
+		close(fd);
+		return NULL;
 	}
 
-	goto out;
+	if (callback &&
+	    fuse_mount_core_start_wait(fds[1], callback, context) != 0) {
+		close(fds[1]);
+		MFChannelClose(mfch);
+		MFRelease(mfch);
+		return NULL;
+	}
 
-mount_err_out:
-	close(fd);
-	fd = -1;
+	if (!callback) {
+		close(fds[1]);
+	}
 
-out:
-	return fd;
+	return mfch;
 }
 
 struct fuse_mount_ext_arg {
@@ -517,7 +562,7 @@ static MFChannelRef fuse_mount_ext(const char *mountpoint,
 	}
 
 	arg->mountpoint = strdup(mountpoint);
-	arg->options = strdup(mo->kernel_opts);
+	arg->options = strdup(mo->kernel_opts ? mo->kernel_opts : "");
 	arg->quiet_mode = mo->quiet_mode;
 	arg->mfch = MFRetain(mfch);
 	arg->callback = callback;
@@ -577,31 +622,28 @@ void destroy_mount_opts(struct mount_opts *mo)
 	free(mo);
 }
 
-MFChannelRef fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
-			       void (*callback)(void *, int), void *context)
+int fuse_darwin_check_mount_opts(struct mount_opts *mo)
 {
 	if (mo->allow_other && mo->allow_root) {
 		fuse_log(FUSE_LOG_ERR,
 			 "fuse: allow_other and allow_root are mutually exclusive\n");
-		return NULL;
+		return -1;
 	}
+	return 0;
+}
+
+MFChannelRef fuse_darwin_mount(const char *mountpoint, struct mount_opts *mo,
+			       void (*callback)(void *, int), void *context)
+{
+	if (fuse_darwin_check_mount_opts(mo) != 0)
+		return NULL;
 
 	if (mo->backend && strcmp(mo->backend, "fskit") == 0) {
 		return fuse_mount_ext(mountpoint, mo, callback, context);
 	} else {
-		int fd;
-		MFChannelRef mfch;
-
 		/* Notify mount tool that it is called from lib */
 		setenv("_FUSE_CALL_BY_LIB", "1", 1);
 
-		fd = fuse_mount_core(mountpoint, mo, callback, context);
-		if (fd < 0)
-			return NULL;
-
-		mfch = MFChannelCreateWithDeviceFileDescriptor(fd);
-		if (mfch == NULL)
-			close(fd);
-		return mfch;
+		return fuse_mount_core(mountpoint, mo, callback, context);
 	}
 }
