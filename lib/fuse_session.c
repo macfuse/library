@@ -148,11 +148,20 @@ void fuse_session_reset(struct fuse_session *se)
 int fuse_session_exited(struct fuse_session *se)
 {
 #ifdef __APPLE__
-	if (atomic_exchange_explicit(&se->sig_unmount, false,
+	if (atomic_exchange_explicit(&se->sig_interrupt, false,
 				     memory_order_relaxed)) {
 		struct fuse_chan *ch = se->ch;
-		if (ch != NULL)
+		if (ch != NULL &&
+		    fuse_chan_get_type(ch) == FUSE_CHAN_TYPE_DARWIN) {
 			fuse_darwin_chan_unmount(ch);
+		} else {
+			/*
+			 * libfuse only owns the mount lifecycle for Darwin
+			 * channels. For custom/fd-backed channels, signals
+			 * should behave like a normal session exit.
+			 */
+			fuse_session_exit(se);
+		}
 	}
 #endif
 	if (se->op.exited)

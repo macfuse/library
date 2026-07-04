@@ -56,7 +56,7 @@ struct fuse_session {
 	volatile int exited;
 
 #ifdef __APPLE__
-	_Atomic bool sig_unmount;
+	_Atomic bool sig_interrupt;
 #endif
 
 	struct fuse_chan *ch;
