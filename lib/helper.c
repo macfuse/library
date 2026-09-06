@@ -28,9 +28,16 @@
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
+#ifdef __APPLE__
+#include <fcntl.h>
+#include <pthread.h>
+#endif
 #include <sys/param.h>
 
 #ifdef __APPLE__
+/* Hidden by _POSIX_C_SOURCE setting. */
+int pthread_is_threaded_np(void);
+
 static _Atomic bool fuse_darwin_mount_started_flag;
 
 void fuse_darwin_set_mount_started(void)
@@ -224,15 +231,165 @@ err:
 	return -1;
 }
 
+#ifdef __APPLE__
+static void fuse_darwin_atfork_prepare(void)
+{
+	if (pthread_is_threaded_np()) {
+		static const char warning[] =
+			"fuse: forking a threaded process is unsafe, the child "
+			"may crash or deadlock\n";
+		int saved_errno = errno;
+
+		/* Avoid stdio locks and custom log callbacks around fork. */
+		(void)write(STDERR_FILENO, warning, sizeof(warning) - 1);
+		errno = saved_errno;
+	}
+}
+
+__attribute__((constructor))
+static void fuse_darwin_atfork_init(void)
+{
+	(void)pthread_atfork(fuse_darwin_atfork_prepare, NULL, NULL);
+}
+
+static int fuse_daemonize_write(int fd, int status)
+{
+	ssize_t res;
+	size_t offset = 0;
+	const char *data = (const char *)&status;
+
+	while (offset < sizeof(status)) {
+		res = write(fd, data + offset, sizeof(status) - offset);
+		if (res == -1) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (res == 0)
+			return -1;
+		offset += (size_t)res;
+	}
+
+	return 0;
+}
+
+static int fuse_daemonize_read(int fd, int *status)
+{
+	ssize_t res;
+	size_t offset = 0;
+	char *data = (char *)status;
+
+	while (offset < sizeof(*status)) {
+		res = read(fd, data + offset, sizeof(*status) - offset);
+		if (res == -1) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (res == 0)
+			return -1;
+		offset += (size_t)res;
+	}
+
+	return 0;
+}
+
+struct fuse_daemonize_context {
+	int fd;
+};
+
+static void fuse_daemonize_callback(void *context, int status)
+{
+	struct fuse_daemonize_context *dc =
+		(struct fuse_daemonize_context *)context;
+
+	if (status == 0 && setsid() == -1) {
+		perror("fuse_daemonize: setsid");
+		status = -1;
+	}
+
+	if (status == 0) {
+		int nullfd = open("/dev/null", O_RDWR, 0);
+
+		(void) fflush(stdout);
+		(void) fflush(stderr);
+
+		if (nullfd != -1) {
+			(void) dup2(nullfd, 0);
+			(void) dup2(nullfd, 1);
+			(void) dup2(nullfd, 2);
+			if (nullfd > 2)
+				close(nullfd);
+		}
+	}
+
+	(void)fuse_daemonize_write(dc->fd, status);
+	close(dc->fd);
+	free(dc);
+}
+
 int fuse_daemonize(int foreground)
 {
-#ifdef __APPLE__
 	if (!foreground && fuse_darwin_mount_started()) {
-		fprintf(stderr,
-			"fuse: daemonize requested after mount started; continuing in foreground\n");
+		fprintf(stderr, "fuse: forking after mount is not supported\n");
 		foreground = 1;
 	}
-#endif /* __APPLE__ */
+	if (!foreground) {
+		int waiter[2];
+		int status = -1;
+		struct fuse_daemonize_context *dc = NULL;
+
+		if (pipe(waiter)) {
+			perror("fuse_daemonize: pipe");
+			return -1;
+		}
+		(void)fcntl(waiter[1], F_SETFD, FD_CLOEXEC);
+
+		/*
+		 * Keep the child in the current process group while mounting so
+		 * terminal signals reach both processes. After successful mount
+		 * completion, the child detaches and notifies the waiting parent.
+		 */
+		switch(fork()) {
+		case -1:
+			perror("fuse_daemonize: fork");
+			close(waiter[0]);
+			close(waiter[1]);
+			return -1;
+		case 0:
+			close(waiter[0]);
+			break;
+		default:
+			close(waiter[1]);
+			if (fuse_daemonize_read(waiter[0], &status) != 0)
+				status = -1;
+			close(waiter[0]);
+			_exit(status == 0 ? 0 : 1);
+		}
+
+		(void) chdir("/");
+
+		dc = calloc(1, sizeof(*dc));
+		if (dc == NULL) {
+			(void)fuse_daemonize_write(waiter[1], -1);
+			close(waiter[1]);
+			return -1;
+		}
+
+		dc->fd = waiter[1];
+		if (fuse_darwin_mount_notify(fuse_daemonize_callback,
+					     dc) != 0) {
+			free(dc);
+			(void)fuse_daemonize_write(waiter[1], -1);
+			close(waiter[1]);
+			return -1;
+		}
+	}
+	return 0;
+}
+#else /* __APPLE__ */
+int fuse_daemonize(int foreground)
+{
 	if (!foreground) {
 		int nullfd;
 		int waiter[2];
@@ -282,6 +439,7 @@ int fuse_daemonize(int foreground)
 	}
 	return 0;
 }
+#endif /* __APPLE__ */
 
 static struct fuse_chan *fuse_mount_common(const char *mountpoint,
 					   struct fuse_args *args)

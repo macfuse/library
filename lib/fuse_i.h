@@ -151,6 +151,30 @@ bool fuse_darwin_chan_not_mounted(struct fuse_chan *ch);
 
 void fuse_darwin_set_mount_started(void);
 bool fuse_darwin_mount_started(void);
+
+typedef void (*fuse_darwin_mount_notify_callback_t)(void *context, int status);
+
+/*
+ * Wait for the currently pending mounts to complete.
+ *
+ * The callback is invoked exactly once, only after every captured mount has
+ * succeeded, failed, or been canceled. Its status is 0 if every captured mount
+ * succeeded, or -1 if any mount failed or was canceled before reaching the
+ * mounted state, including cancellation of a delayed mount.
+ *
+ * The callback may run before this function returns. If no mounts are pending,
+ * it is invoked immediately with 0. In case this function returns before the
+ * callback is invoked, the caller must continue servicing file system requests
+ * for mounting to complete.
+ *
+ * @param callback callback to invoke
+ * @param context caller-defined context passed to @p callback
+ * @return 0 if notification setup succeeded, which does not imply that mounting
+ * has completed, or -1 on setup failure. On setup failure no callback is
+ * invoked and the caller retains responsibility for @p context.
+ */
+int fuse_darwin_mount_notify(fuse_darwin_mount_notify_callback_t callback,
+			     void *context);
 #endif
 
 struct fuse_session *fuse_lowlevel_new_common(struct fuse_args *args,

@@ -80,6 +80,168 @@ static void fuse_darwin_dasession_destroy(void)
 		CFRelease(session);
 }
 
+struct fuse_darwin_pending_mount {
+	struct fuse_chan *ch;
+	uint64_t generation;
+	bool started;
+	struct fuse_darwin_pending_mount *next;
+};
+
+struct fuse_darwin_mount_waiter {
+	fuse_darwin_mount_notify_callback_t callback;
+	void *context;
+	uint64_t generation;
+	unsigned pending;
+	int status;
+	struct fuse_darwin_mount_waiter *next;
+};
+
+static pthread_mutex_t fuse_darwin_mount_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct fuse_darwin_pending_mount *fuse_darwin_pending_mounts;
+static struct fuse_darwin_mount_waiter *fuse_darwin_mount_waiters;
+static uint64_t fuse_darwin_mount_generation;
+
+static int fuse_darwin_mount_register(struct fuse_chan *ch)
+{
+	struct fuse_darwin_pending_mount *mount;
+
+	mount = calloc(1, sizeof(*mount));
+	if (mount == NULL)
+		return -1;
+
+	fuse_chan_retain(ch);
+	mount->ch = ch;
+
+	pthread_mutex_lock(&fuse_darwin_mount_lock);
+	mount->generation = ++fuse_darwin_mount_generation;
+	mount->next = fuse_darwin_pending_mounts;
+	fuse_darwin_pending_mounts = mount;
+	pthread_mutex_unlock(&fuse_darwin_mount_lock);
+
+	return 0;
+}
+
+static int fuse_darwin_chan_mount_start(struct fuse_chan *ch);
+
+int fuse_darwin_mount_notify(fuse_darwin_mount_notify_callback_t callback,
+			     void *context)
+{
+	struct fuse_darwin_mount_waiter *waiter;
+	struct fuse_darwin_pending_mount *mount;
+	struct fuse_chan *ch;
+	uint64_t generation;
+	unsigned pending = 0;
+
+	if (callback == NULL)
+		return -1;
+
+	waiter = calloc(1, sizeof(*waiter));
+	if (waiter == NULL)
+		return -1;
+
+	pthread_mutex_lock(&fuse_darwin_mount_lock);
+
+	for (mount = fuse_darwin_pending_mounts; mount != NULL;
+	     mount = mount->next)
+		pending++;
+	if (pending == 0) {
+		pthread_mutex_unlock(&fuse_darwin_mount_lock);
+		free(waiter);
+		callback(context, 0);
+		return 0;
+	}
+
+	generation = fuse_darwin_mount_generation;
+
+	waiter->callback = callback;
+	waiter->context = context;
+	waiter->generation = generation;
+	waiter->pending = pending;
+	waiter->next = fuse_darwin_mount_waiters;
+	fuse_darwin_mount_waiters = waiter;
+
+	pthread_mutex_unlock(&fuse_darwin_mount_lock);
+
+	while (true) {
+		ch = NULL;
+
+		pthread_mutex_lock(&fuse_darwin_mount_lock);
+		for (mount = fuse_darwin_pending_mounts; mount != NULL;
+		     mount = mount->next) {
+			if (mount->generation <= generation &&
+			    !mount->started) {
+				mount->started = true;
+				fuse_chan_retain(mount->ch);
+				ch = mount->ch;
+				break;
+			}
+		}
+		pthread_mutex_unlock(&fuse_darwin_mount_lock);
+
+		if (ch == NULL)
+			break;
+
+		(void)fuse_darwin_chan_mount_start(ch);
+		fuse_chan_release(ch);
+	}
+	return 0;
+}
+
+static void fuse_darwin_chan_mount_complete(struct fuse_chan *ch, int status)
+{
+	struct fuse_darwin_pending_mount **entryp;
+	struct fuse_darwin_pending_mount *entry = NULL;
+	struct fuse_darwin_mount_waiter *ready = NULL;
+
+	pthread_mutex_lock(&fuse_darwin_mount_lock);
+
+	for (entryp = &fuse_darwin_pending_mounts; *entryp != NULL;
+	     entryp = &(*entryp)->next) {
+		if ((*entryp)->ch == ch) {
+			entry = *entryp;
+			*entryp = entry->next;
+			break;
+		}
+	}
+
+	if (entry != NULL) {
+		struct fuse_darwin_mount_waiter **waiterp;
+
+		for (waiterp = &fuse_darwin_mount_waiters; *waiterp != NULL;) {
+			struct fuse_darwin_mount_waiter *waiter = *waiterp;
+
+			if (entry->generation <= waiter->generation) {
+				if (status != 0)
+					waiter->status = -1;
+				assert(waiter->pending > 0);
+				waiter->pending--;
+				if (waiter->pending == 0) {
+					*waiterp = waiter->next;
+					waiter->next = ready;
+					ready = waiter;
+					continue;
+				}
+			}
+
+			waiterp = &waiter->next;
+		}
+	}
+
+	pthread_mutex_unlock(&fuse_darwin_mount_lock);
+
+	if (entry != NULL) {
+		fuse_chan_release(entry->ch);
+		free(entry);
+	}
+	while (ready != NULL) {
+		struct fuse_darwin_mount_waiter *waiter = ready;
+		ready = waiter->next;
+
+		waiter->callback(waiter->context, waiter->status);
+		free(waiter);
+	}
+}
+
 static struct fuse_darwin_chan_data *
 fuse_darwin_chan_data(struct fuse_chan *ch)
 {
@@ -213,6 +375,7 @@ static void fuse_darwin_chan_mount_callback(void *context, int status)
 	DASessionRef dasession = NULL;
 	CFURLRef url = NULL;
 	DADiskRef disk = NULL;
+	int completion_status = -1;
 
 	mc = (struct fuse_darwin_chan_mount_context *)context;
 	dch = fuse_darwin_chan_data(mc->ch);
@@ -297,6 +460,8 @@ state:
 				dch->mount_state = FUSE_DARWIN_MOUNT_MOUNTED;
 				pthread_cond_broadcast(&dch->mount_cond);
 				pthread_mutex_unlock(&dch->mount_lock);
+
+				completion_status = 0;
 			}
 			goto out;
 		}
@@ -308,6 +473,7 @@ out:
 	if (dasession != NULL)
 		CFRelease(dasession);
 
+	fuse_darwin_chan_mount_complete(mc->ch, completion_status);
 	fuse_darwin_chan_mount_context_destroy(mc);
 }
 
@@ -356,11 +522,60 @@ out:
 	return mfch;
 }
 
+static int fuse_darwin_chan_mount_start(struct fuse_chan *ch)
+{
+	struct fuse_darwin_chan_data *dch = fuse_darwin_chan_data(ch);
+	MFChannelRef mfch = NULL;
+	int err = 0;
+
+	pthread_mutex_lock(&dch->mount_lock);
+	if (dch->mount_state != FUSE_DARWIN_MOUNT_DELAYED) {
+		pthread_mutex_unlock(&dch->mount_lock);
+		return EAGAIN;
+	}
+
+	fuse_darwin_set_mount_started();
+	dch->mount_state = FUSE_DARWIN_MOUNT_MOUNTING;
+	pthread_cond_broadcast(&dch->mount_cond);
+	pthread_mutex_unlock(&dch->mount_lock);
+
+	mfch = fuse_darwin_chan_mount_real(ch);
+	if (mfch == NULL)
+		err = errno != 0 ? errno : ENODEV;
+
+	pthread_mutex_lock(&dch->mount_lock);
+	if (dch->mount_state != FUSE_DARWIN_MOUNT_MOUNTING) {
+		pthread_mutex_unlock(&dch->mount_lock);
+		if (mfch != NULL) {
+			MFChannelClose(mfch);
+			MFRelease(mfch);
+		}
+		return -EAGAIN;
+	}
+	if (mfch == NULL) {
+		dch->mount_state = FUSE_DARWIN_MOUNT_FAILED;
+		pthread_cond_broadcast(&dch->mount_cond);
+		pthread_mutex_unlock(&dch->mount_lock);
+		fuse_darwin_chan_mount_complete(ch, -1);
+		return -err;
+	}
+
+	pthread_mutex_lock(&dch->lock);
+	dch->mfch = mfch;
+	dch->mfch_closed = false;
+	pthread_mutex_unlock(&dch->lock);
+
+	dch->mount_state = FUSE_DARWIN_MOUNT_CONNECTING;
+	pthread_cond_broadcast(&dch->mount_cond);
+	pthread_mutex_unlock(&dch->mount_lock);
+
+	return 0;
+}
+
 int fuse_darwin_chan_mfch(struct fuse_chan *ch, MFChannelRef *mfchp)
 {
 	int err = 0;
 	struct fuse_darwin_chan_data *dch = fuse_darwin_chan_data(ch);
-	MFChannelRef mfch = NULL;
 
 	assert(mfchp != NULL);
 	*mfchp = NULL;
@@ -376,39 +591,11 @@ int fuse_darwin_chan_mfch(struct fuse_chan *ch, MFChannelRef *mfchp)
 			return 0;
 
 		case FUSE_DARWIN_MOUNT_DELAYED:
-			fuse_darwin_set_mount_started();
-			dch->mount_state = FUSE_DARWIN_MOUNT_MOUNTING;
-			pthread_cond_broadcast(&dch->mount_cond);
 			pthread_mutex_unlock(&dch->mount_lock);
-
-			mfch = fuse_darwin_chan_mount_real(ch);
-			if (mfch == NULL)
-				err = errno != 0 ? errno : ENODEV;
-
+			err = fuse_darwin_chan_mount_start(ch);
+			if (err != 0 && err != EAGAIN)
+				return err;
 			pthread_mutex_lock(&dch->mount_lock);
-			if (dch->mount_state != FUSE_DARWIN_MOUNT_MOUNTING) {
-				pthread_mutex_unlock(&dch->mount_lock);
-				if (mfch != NULL) {
-					MFChannelClose(mfch);
-					MFRelease(mfch);
-				}
-				pthread_mutex_lock(&dch->mount_lock);
-				break;
-			}
-			if (mfch == NULL) {
-				dch->mount_state = FUSE_DARWIN_MOUNT_FAILED;
-				pthread_cond_broadcast(&dch->mount_cond);
-				pthread_mutex_unlock(&dch->mount_lock);
-				return -err;
-			}
-
-			pthread_mutex_lock(&dch->lock);
-			dch->mfch = mfch;
-			dch->mfch_closed = false;
-			pthread_mutex_unlock(&dch->lock);
-
-			dch->mount_state = FUSE_DARWIN_MOUNT_CONNECTING;
-			pthread_cond_broadcast(&dch->mount_cond);
 			break;
 
 		case FUSE_DARWIN_MOUNT_MOUNTING:
@@ -526,6 +713,7 @@ static void *fuse_darwin_chan_unmount_thread(void *data)
 {
 	struct fuse_chan *ch = (struct fuse_chan *)data;
 	struct fuse_darwin_chan_data *dch = fuse_darwin_chan_data(ch);
+	bool mount_complete = false;
 	int res;
 	bool force;
 	struct timespec timeout;
@@ -554,6 +742,8 @@ static void *fuse_darwin_chan_unmount_thread(void *data)
 			mountpoint = dch->mountpoint;
 			dch->mountpoint = NULL;
 			pthread_mutex_unlock(&dch->mount_lock);
+
+			mount_complete = true;
 			goto out;
 
 		case FUSE_DARWIN_MOUNT_MOUNTING:
@@ -569,6 +759,7 @@ static void *fuse_darwin_chan_unmount_thread(void *data)
 				pthread_mutex_unlock(&dch->mount_lock);
 
 				fuse_darwin_chan_close(ch);
+				mount_complete = true;
 				goto out;
 			}
 
@@ -612,11 +803,15 @@ static void *fuse_darwin_chan_unmount_thread(void *data)
 
 out:
 	free(mountpoint);
+
+	if (mount_complete)
+		fuse_darwin_chan_mount_complete(ch, -1);
+
 	fuse_chan_release(ch);
 	return NULL;
 }
 
-static void fuse_darwin_chan_start_unmount_thread(struct fuse_chan *ch)
+static void fuse_darwin_chan_unmount_start_thread(struct fuse_chan *ch)
 {
 	pthread_attr_t attr;
 	pthread_t thread;
@@ -655,6 +850,7 @@ static void fuse_darwin_chan_start_unmount_thread(struct fuse_chan *ch)
 void fuse_darwin_chan_unmount(struct fuse_chan *ch)
 {
 	struct fuse_darwin_chan_data *dch = fuse_darwin_chan_data(ch);
+	bool mount_complete = false;
 	char *mountpoint = NULL;
 	bool force;
 
@@ -678,13 +874,15 @@ void fuse_darwin_chan_unmount(struct fuse_chan *ch)
 			mountpoint = dch->mountpoint;
 			dch->mountpoint = NULL;
 			pthread_mutex_unlock(&dch->mount_lock);
+
+			mount_complete = true;
 			goto out;
 
 		case FUSE_DARWIN_MOUNT_MOUNTING:
 		case FUSE_DARWIN_MOUNT_CONNECTING:
 		case FUSE_DARWIN_MOUNT_MOUNTED:
 			pthread_mutex_unlock(&dch->mount_lock);
-			fuse_darwin_chan_start_unmount_thread(ch);
+			fuse_darwin_chan_unmount_start_thread(ch);
 			return;
 
 		case FUSE_DARWIN_MOUNT_UNMOUNTING:
@@ -695,6 +893,9 @@ void fuse_darwin_chan_unmount(struct fuse_chan *ch)
 
 out:
 	free(mountpoint);
+
+	if (mount_complete)
+		fuse_darwin_chan_mount_complete(ch, -1);
 }
 
 bool fuse_darwin_chan_not_mounted(struct fuse_chan *ch)
@@ -852,7 +1053,9 @@ static void fuse_darwin_chan_destroy(struct fuse_chan *ch)
 	dch->mfch = NULL;
 	pthread_mutex_unlock(&dch->lock);
 
-	destroy_mount_opts(dch->mount_opts);
+	if (dch->mount_opts != NULL)
+		destroy_mount_opts(dch->mount_opts);
+
 	free(dch->mountpoint);
 	pthread_cond_destroy(&dch->mount_cond);
 	pthread_mutex_destroy(&dch->mount_lock);
@@ -911,7 +1114,17 @@ struct fuse_chan *fuse_darwin_chan_new(const char *mountpoint,
 		goto err_out;
 
 	fuse_chan_set_type(ch, FUSE_CHAN_TYPE_DARWIN);
+
+	pthread_mutex_lock(&dch->mount_lock);
+	if (fuse_darwin_mount_register(ch) != 0) {
+		pthread_mutex_unlock(&dch->mount_lock);
+		fprintf(stderr, "fuse: failed to register mount\n");
+		fuse_chan_release(ch);
+		return NULL;
+	}
 	dch->mount_opts = mo;
+	pthread_mutex_unlock(&dch->mount_lock);
+
 	return ch;
 
 err_out:
