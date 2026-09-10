@@ -160,7 +160,9 @@ struct fuse_file_info {
 	 * same file handle. */
 	uint64_t fh;
 
-	/** Lock owner id.  Available in locking operations and flush */
+	/** Lock owner id.  Available in locking operations and flush
+	 * (except on macOS).  Identifies the lock owner independently of fh;
+	 * multiple lock owners may share the same file handle. */
 	uint64_t lock_owner;
 
 	/** Requested poll events.  Available in ->poll.  Only set on kernels
@@ -235,6 +237,10 @@ struct fuse_loop_config_v1 {
  *
  * This feature is enabled by default when supported by the kernel,
  * and if getlk() and setlk() handlers are implemented.
+ *
+ * On macOS, enabling this feature replaces the kernel's local advisory
+ * locking with filesystem-provided POSIX locking.  In this mode, flock(),
+ * timed locks and open-file-description locks are not supported.
  */
 #define FUSE_CAP_POSIX_LOCKS (1UL << 1)
 

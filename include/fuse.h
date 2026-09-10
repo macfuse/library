@@ -763,7 +763,7 @@ struct fuse_operations {
 	 * for fcntl(2).  The l_whence field will always be set to
 	 * SEEK_SET.
 	 *
-	 * For checking lock ownership, the 'fuse_file_info->owner'
+	 * For checking lock ownership, the 'fuse_file_info->lock_owner'
 	 * argument must be used.
 	 *
 	 * For F_GETLK operation, the library will first check currently
