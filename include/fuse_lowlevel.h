@@ -534,7 +534,10 @@ struct fuse_lowlevel_ops {
 	 * write errors.
 	 *
 	 * If the filesystem supports file locking operations (setlk,
-	 * getlk) it should remove all locks belonging to 'fi->owner'.
+	 * getlk) it should remove all locks belonging to 'fi->lock_owner'.
+	 * On macOS, close-time POSIX unlocks are delivered as explicit setlk()
+	 * requests instead.  The flush request does not identify a lock owner
+	 * and must not be used to remove POSIX locks.
 	 *
 	 * Valid replies:
 	 *   fuse_reply_err
@@ -849,7 +852,7 @@ struct fuse_lowlevel_ops {
 	 *
 	 * For POSIX threads (NPTL) there's a 1-1 relation between pid and
 	 * owner, but otherwise this is not always the case.  For checking
-	 * lock ownership, 'fi->owner' must be used.  The l_pid field in
+	 * lock ownership, 'fi->lock_owner' must be used.  The l_pid field in
 	 * 'struct flock' should only be used to fill in this field in
 	 * getlk().
 	 *

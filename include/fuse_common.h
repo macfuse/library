@@ -142,7 +142,9 @@ struct fuse_file_info {
 	    Available in all other file operations */
 	uint64_t fh;
 
-	/** Lock owner id.  Available in locking operations and flush */
+	/** Lock owner id.  Available in locking operations and flush
+	 * (except on macOS).  Identifies the lock owner independently of fh;
+	 * multiple lock owners may share the same file handle. */
 	uint64_t lock_owner;
 };
 
@@ -150,7 +152,10 @@ struct fuse_file_info {
  * Capability bits for 'fuse_conn_info.capable' and 'fuse_conn_info.want'
  *
  * FUSE_CAP_ASYNC_READ: filesystem supports asynchronous read requests
- * FUSE_CAP_POSIX_LOCKS: filesystem supports "remote" locking
+ * FUSE_CAP_POSIX_LOCKS: filesystem supports "remote" locking.
+ *     On macOS, enabling this feature replaces the kernel's local advisory
+ *     locking with filesystem-provided POSIX locking.  In this mode, flock(),
+ *     timed locks and open-file-description locks are not supported.
  * FUSE_CAP_ATOMIC_O_TRUNC: filesystem handles the O_TRUNC open flag
  * FUSE_CAP_EXPORT_SUPPORT: filesystem handles lookups of "." and ".."
  * FUSE_CAP_BIG_WRITES: filesystem can handle write size larger than 4kB

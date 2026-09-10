@@ -4738,7 +4738,13 @@ static int fuse_flush_common(struct fuse *f, fuse_req_t req, fuse_ino_t ino,
 	lock.l_type = F_UNLCK;
 	lock.l_whence = SEEK_SET;
 	err = fuse_fs_flush(f->fs, path, fi);
+#ifdef __APPLE__
+	/* macFUSE sends explicit POSIX unlock requests on descriptor close.
+	 * A flush of its shared file handle does not identify a lock owner. */
+	errlock = -ENOSYS;
+#else
 	errlock = fuse_fs_lock(f->fs, path, fi, F_SETLK, &lock);
+#endif
 	fuse_finish_interrupt(f, req, &d);
 
 	if (errlock != -ENOSYS) {
