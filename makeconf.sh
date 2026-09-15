@@ -12,9 +12,7 @@ fi
 echo "Running libtoolize..."
 $LIBTOOLIZE -c
 
-if test $DARWIN -eq 1; then
-    touch config.rpath
-else
+if test $DARWIN -eq 0; then
     # We use iconv directly rather than via gettext, so
     # we need to manually copy config.rpath.
     CONFIG_RPATH=/usr/share/gettext/config.rpath
