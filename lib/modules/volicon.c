@@ -639,6 +639,13 @@ static int volicon_lock(const char *path, struct fuse_file_info *fi, int cmd,
 	return fuse_fs_lock(volicon_get()->next, path, fi, cmd, lock);
 }
 
+static int volicon_flock(const char *path, struct fuse_file_info *fi, int op)
+{
+	ERROR_IF_MAGIC_FILE(path, ENOTSUP);
+
+	return fuse_fs_flock(volicon_get()->next, path, fi, op);
+}
+
 static int volicon_utimens(const char *path, const struct timespec ts[2])
 {
 	ERROR_IF_MAGIC_FILE(path, EACCES);
@@ -709,6 +716,7 @@ static struct fuse_operations volicon_oper = {
 	.ftruncate   = volicon_ftruncate,
 	.fgetattr    = volicon_fgetattr,
 	.lock        = volicon_lock,
+	.flock       = volicon_flock,
 	.utimens     = volicon_utimens,
 	.bmap        = volicon_bmap,
 	.fallocate   = volicon_fallocate,

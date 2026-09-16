@@ -491,6 +491,15 @@ static int threadid_lock(const char *path, struct fuse_file_info *fi, int cmd,
 	return res;
 }
 
+static int threadid_flock(const char *path, struct fuse_file_info *fi, int op)
+{
+	THREADID_PRE
+	int res = fuse_fs_flock(threadid_get()->next, path, fi, op);
+	THREADID_POST
+
+	return res;
+}
+
 static int threadid_utimens(const char *path, const struct timespec ts[2])
 {
 	THREADID_PRE
@@ -565,6 +574,7 @@ static struct fuse_operations threadid_oper = {
 	.ftruncate   = threadid_ftruncate,
 	.fgetattr    = threadid_fgetattr,
 	.lock        = threadid_lock,
+	.flock       = threadid_flock,
 	.utimens     = threadid_utimens,
 	.bmap        = threadid_bmap,
 	.fallocate   = threadid_fallocate,
