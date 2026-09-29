@@ -4504,7 +4504,7 @@ void fuse_session_process_buf_internal(struct fuse_session *se,
 			else
 				_do_write(req, in->nodeid, inarg, pbuf.mem);
 		} else if (in->opcode == FUSE_NOTIFY_REPLY) {
-			do_notify_reply(req, in->nodeid, inarg, &pbuf);
+			_do_notify_reply(req, in->nodeid, inarg, &pbuf);
 		} else {
 			err = EIO;
 			goto reply_err;
