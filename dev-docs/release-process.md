@@ -19,7 +19,7 @@ Release Process
   * `md build && (cd build && meson .. && ninja)`
   * `sudo sudo chown root:root build/util/fusermount3`
   * `sudo chmod 4755 build/util/fusermount3`
-  * `(cd build; python3 -m pytest test/)`
+  * `(cd build; ../test/run-tests.py --build-dir .)`
 * Upload API docs:
   * `rm -r ../libfuse.github.io/doxygen && cp -a doc/html ../libfuse.github.io/doxygen`
   * `git -C ../libfuse.github.io add doxygen/`
@@ -33,7 +33,7 @@ Release Process
 Announcement email template
 
 ```
-To: fuse-devel@lists.sourceforge.net
+To: fuse-devel@lists.linux.dev
 Subject: [ANNOUNCE] libfuse XXXX has been released
 
 Dear all,
